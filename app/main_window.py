@@ -708,22 +708,28 @@ class CS2Tool(FluentWindow):
             return False
 
         try:
-            replacer = FontReplacer(steam_library_path)
-            result = replacer.ensure_font_replaced(current_font_path, lambda msg: None)
+            replacer = FontReplacer(steam_library_path, self.config_manager.replacement_backups_dir)
+            if replacer.is_font_replacement_intact(current_font_path):
+                self.font_path = current_font_path
+                return False
+            # 游戏运行时字体文件被占用，等下次启动工具或重新检测路径时再补齐
+            if LaunchManager.is_cs2_running():
+                return False
+
+            result = replacer.replace_font(current_font_path, lambda msg: None)
             if not result.get("success"):
                 if not silent:
                     self.show_warning("字体检查失败", result.get("error", "当前字体状态检查失败。"))
                 return False
 
             self.font_path = current_font_path
-            if result.get("repaired"):
-                font_name = result.get("font_name") or os.path.splitext(os.path.basename(current_font_path))[0]
-                self.config_manager.set("current_font", font_name)
-                self.config_manager.set("current_font_path", current_font_path)
-                self.update_home_status()
-                if not silent:
-                    self.show_success("字体已恢复", f"已自动补齐字体文件：{font_name}")
-                return True
+            font_name = result.get("font_name") or os.path.splitext(os.path.basename(current_font_path))[0]
+            self.config_manager.set("current_font", font_name)
+            self.config_manager.set("current_font_path", current_font_path)
+            self.update_home_status()
+            # 自动改写了游戏文件，告知用户并说明如何回到默认字体
+            self.show_info("已重新应用自定义字体", f"{font_name}。如需游戏默认字体，请在“个性化 - 全局字体”中点击“恢复默认字体”。", duration=6000)
+            return True
         except Exception as e:
             print(f"字体自愈失败: {e}")
         return False
@@ -736,6 +742,9 @@ class CS2Tool(FluentWindow):
         if not cs2_path or not os.path.exists(cs2_path):
             self.show_error("路径缺失", "CS2路径未设置或无效，请先在主页设置。")
             return
+        if LaunchManager.is_cs2_running():
+            self.show_warning("请先关闭 CS2", "游戏运行时字体文件被占用，关闭游戏后再替换字体。")
+            return
 
         self.animation_manager.animate_button_click(self.font_tab.execute_font_btn)
 
@@ -744,7 +753,7 @@ class CS2Tool(FluentWindow):
             if not steam_library_path:
                 self.show_error("路径转换失败", "无法从CS2路径获取Steam库路径。")
                 return
-            replacer = FontReplacer(steam_library_path)
+            replacer = FontReplacer(steam_library_path, self.config_manager.replacement_backups_dir)
             QApplication.processEvents()
 
             result = replacer.replace_font(self.font_path, lambda msg: None)
@@ -760,6 +769,45 @@ class CS2Tool(FluentWindow):
             self.show_error("严重错误", str(e))
         finally:
             pass  # 状态标签已删除
+
+    def restore_default_font(self):
+        cs2_path = self.steam_path
+        if not cs2_path or not os.path.exists(cs2_path):
+            self.show_error("路径缺失", "CS2路径未设置或无效，请先在主页设置。")
+            return
+        if LaunchManager.is_cs2_running():
+            self.show_warning("请先关闭 CS2", "游戏运行时字体文件被占用，关闭游戏后再恢复默认字体。")
+            return
+        steam_library_path = SteamUtils.extract_steam_library_from_cs2_path(cs2_path)
+        if not steam_library_path:
+            self.show_error("路径转换失败", "无法从CS2路径获取Steam库路径。")
+            return
+
+        self.animation_manager.animate_button_click(self.font_tab.restore_font_btn)
+        result = FontReplacer(steam_library_path, self.config_manager.replacement_backups_dir).restore_font()
+        if not result["success"]:
+            self.show_error("恢复失败", result["error"])
+            return
+
+        # 清除当前字体记录，否则启动时的字体自愈会再次替换
+        self.config_manager.config.pop("current_font", None)
+        self.config_manager.config.pop("current_font_path", None)
+        self.config_manager.save_config()
+        self.update_home_status()
+
+        if result.get("needs_verify"):
+            msg_box = MessageBox(
+                "需要验证游戏文件",
+                "已移除自定义字体，但没有找到替换前的原版字体备份（可能由旧版本替换）。"
+                "需要通过 Steam 验证游戏文件完整性来补回默认字体，是否现在开始验证？",
+                self
+            )
+            msg_box.yesButton.setText("开始验证")
+            msg_box.cancelButton.setText("稍后")
+            if msg_box.exec():
+                QDesktopServices.openUrl(QUrl("steam://validate/730"))
+        else:
+            self.show_success("已恢复默认字体", "重启游戏后生效。")
 
     def show_info(self, title, content, duration=3000):
         InfoBar.info(title, content, parent=self, duration=duration)

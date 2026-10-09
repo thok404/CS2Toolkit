@@ -254,6 +254,13 @@ class EventConfigWidget(QWidget):
         layout.addWidget(self.edit_btn)
         layout.addWidget(self.delete_btn)
 
+        # 列表内直接修改武器时同步到运行中的事件配置（构造完成后再连接，避免初始化时触发保存）
+        self.weapon_name_input.currentTextChanged.connect(self._notify_change)
+
+    def _notify_change(self, *_):
+        if self.on_change:
+            self.on_change()
+
     def set_on_change(self, callback):
         # 设置配置改变时的回调函数
         self.on_change = callback
@@ -268,9 +275,10 @@ class EventConfigWidget(QWidget):
                 self.on_change()
     
     def _on_volume_changed(self, value):
-        # 当音量滑块值改变时更新显示
+        # 当音量滑块值改变时更新显示，并同步到运行中的事件配置（否则游戏内音量不变）
         self.volume_label.setText(f"{value}%")
         self.volume_slider.setToolTip(f"音量: {value}%")
+        self._notify_change()
 
 
 

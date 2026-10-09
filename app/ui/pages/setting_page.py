@@ -597,6 +597,7 @@ class SettingPage(ScrollArea):
 
         if dialog.exec():
             # 1. 恢复游戏资源
+            font_result = None
             steam_path = self.parent_window.steam_path
             if steam_path and os.path.exists(steam_path):
                 from ...logic.steam_utils import SteamUtils
@@ -609,9 +610,7 @@ class SettingPage(ScrollArea):
                 if steam_lib:
                     # 恢复字体
                     from ...logic.font_replacer import FontReplacer
-                    replacer = FontReplacer(steam_lib)
-                    if hasattr(replacer, 'restore_font'):
-                        replacer.restore_font()
+                    font_result = FontReplacer(steam_lib, self.config_manager.replacement_backups_dir).restore_font()
 
                     # 恢复视频
                     from ...logic.video_replacer import VideoReplacer
@@ -624,6 +623,10 @@ class SettingPage(ScrollArea):
 
             # 3. 刷新 UI
             self.parent_window.show_success("重置成功", "所有设置已恢复为初始状态。")
+            if font_result and not font_result.get("success"):
+                self.parent_window.show_warning("默认字体恢复失败", f"{font_result.get('error')}\n请关闭游戏后在“个性化 - 全局字体”中点击“恢复默认字体”重试。")
+            elif font_result and font_result.get("needs_verify"):
+                self.parent_window.show_warning("需要验证游戏文件", "已移除自定义字体，请通过 Steam 验证游戏文件完整性以补回默认字体。")
             self.parent_window.load_all_presets()
             self.parent_window.update_home_status()
             self.parent_window.apply_custom_background()
@@ -632,6 +635,10 @@ class SettingPage(ScrollArea):
             if hasattr(self.parent_window, 'visual_tab'):
                 self.parent_window.visual_tab.config_manager = self.config_manager
                 self.parent_window.visual_tab._update_ui_from_config()
+            if hasattr(self.parent_window, 'go_pet_tab'):
+                self.parent_window.go_pet_tab.reload_from_config()
+            if hasattr(self.parent_window, 'go_pet_manager'):
+                self.parent_window.go_pet_manager._update_config()
 
             # 刷新主题
             self.themeCard.comboBox.blockSignals(True)
@@ -769,7 +776,7 @@ class SettingPage(ScrollArea):
                     from ...logic.steam_utils import SteamUtils
                     steam_lib = SteamUtils.extract_steam_library_from_cs2_path(self.parent_window.steam_path)
                     if steam_lib:
-                        replacer = FontReplacer(steam_lib)
+                        replacer = FontReplacer(steam_lib, self.config_manager.replacement_backups_dir)
                         replacer.replace_font(font_path, lambda msg: None)
 
             if selections.get("video", True) or selections.get("sound", True) or selections.get("font", True):

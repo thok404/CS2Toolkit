@@ -4,14 +4,40 @@ import webbrowser
 import random
 import json
 import subprocess
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtWidgets import QWidget, QLabel
-from PySide6.QtCore import Qt, QUrl, QTimer, Signal, QObject, QPropertyAnimation
-from PySide6.QtGui import QPixmap, QColor, QMovie
+from PySide6.QtCore import Qt, QUrl, QTimer, Signal, QObject, QPropertyAnimation, QRect
+from PySide6.QtGui import QPixmap, QColor, QMovie, QGuiApplication
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from .audio_session_controller import AudioSessionController
 from .cs2_window import find_cs2_window
+
+
+def _native_rect_to_logical(x, y, width, height):
+    """Map a Win32 rect in physical pixels to Qt's device-independent pixels.
+
+    Qt keeps each screen's top-left corner in physical pixels and scales the
+    rest of that screen by its device pixel ratio, so the rect has to be mapped
+    through the screen that contains it.  Passing physical pixels straight to
+    ``setGeometry`` makes the overlay 1.5x too large on a 150% display and
+    pushes the kill icon below the visible area.
+    """
+    center_x = x + width // 2
+    center_y = y + height // 2
+    for screen in QGuiApplication.screens():
+        geometry = screen.geometry()
+        ratio = screen.devicePixelRatio()
+        if (geometry.x() <= center_x < geometry.x() + round(geometry.width() * ratio)
+                and geometry.y() <= center_y < geometry.y() + round(geometry.height() * ratio)):
+            return QRect(
+                geometry.x() + round((x - geometry.x()) / ratio),
+                geometry.y() + round((y - geometry.y()) / ratio),
+                round(width / ratio),
+                round(height / ratio),
+            )
+    return None
+
 
 class VisualSignals(QObject):
     update_flash = Signal(int)
@@ -163,9 +189,10 @@ class OverlayWindow(QWidget):
             width = rect.right - rect.left
             height = rect.bottom - rect.top
 
-            # 如果获取到的窗口大小有效，则设置为游戏窗口大小
-            if width > 0 and height > 0:
-                self.setGeometry(pt.x, pt.y, width, height)
+            # 如果获取到的窗口大小有效，则设置为游戏窗口大小（Win32 返回物理像素，需换算为 Qt 逻辑像素）
+            game_rect = _native_rect_to_logical(pt.x, pt.y, width, height) if width > 0 and height > 0 else None
+            if game_rect is not None:
+                self.setGeometry(game_rect)
             else:
                 screen = self.screen().geometry()
                 self.setGeometry(screen)
@@ -445,6 +472,9 @@ class VisualHandler(QObject):
         self.signals.minimize_browser.connect(self._minimize_browser)
         self.signals.pause_media.connect(self._pause_media)
         self.audio_session_controller = AudioSessionController()
+        # 降低/恢复音量必须按触发顺序执行，否则短暂闪白时恢复可能先于降低完成，导致游戏音量一直偏低
+        self._audio_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-audio")
+        self._closed = False
 
         self.is_flashed = False
         self.is_dead = False
@@ -497,6 +527,8 @@ class VisualHandler(QObject):
         self.overlay.kill_icon_bottom = config.get('kill_icon_bottom', 100)
 
     def process_gsi(self, game_state: dict):
+        if self._closed:
+            return
         self._update_config()
 
         if not self.visual_master_enabled:
@@ -598,8 +630,9 @@ class VisualHandler(QObject):
                 # 决定显示的图标
                 icon_to_show = ""
                 if self.kill_icon_is_advanced:
-                    idx = min(current_round_kills - 1, 4)
-                    icon_to_show = self.kill_icons_1_5[idx].get('path', '')
+                    idx = min(max(current_round_kills, 1), 5) - 1
+                    icon_config = self.kill_icons_1_5[idx] if idx < len(self.kill_icons_1_5) else {}
+                    icon_to_show = icon_config.get('path', '')
                     if not icon_to_show or not os.path.exists(icon_to_show):
                         icon_to_show = self.kill_icon_path
                 else:
@@ -610,8 +643,9 @@ class VisualHandler(QObject):
             elif current_match_kills < self._last_match_kills:
                 self._last_match_kills = current_match_kills
         elif is_observing:
-            match_stats = player.get('match_stats', {})
-            self._last_match_kills = match_stats.get('kills', 0)
+            # 观战时 match_stats 属于被观战的玩家，不能作为自己的击杀基线；
+            # 回到自己视角后重新同步，避免复活时误显示击杀图标。
+            self._last_match_kills = -1
 
         self._last_phase = phase
 
@@ -665,7 +699,7 @@ class VisualHandler(QObject):
             finally:
                 comtypes.CoUninitialize()
 
-        threading.Thread(target=_task, daemon=True).start()
+        self._audio_executor.submit(_task)
 
     def _restore_flash_audio_reduction(self):
         if not self._flash_volume_reduced:
@@ -683,7 +717,7 @@ class VisualHandler(QObject):
             finally:
                 comtypes.CoUninitialize()
 
-        threading.Thread(target=_task, daemon=True).start()
+        self._audio_executor.submit(_task)
 
     def _minimize_cs2(self):
         user32 = ctypes.windll.user32
@@ -1041,4 +1075,9 @@ class VisualHandler(QObject):
                 subprocess.run(["taskkill", "/F", "/IM", b], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
 
     def cleanup(self):
+        if self._closed:
+            return
+        self._closed = True
         self._restore_flash_audio_reduction()
+        # 保留已排队的恢复操作，退出时不再接受新的音量任务。
+        self._audio_executor.shutdown(wait=False)

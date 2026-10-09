@@ -1,18 +1,27 @@
 # 字体替换功能模块
 # 处理字体文件的复制和配置文件的生成
 
+import hashlib
 import os
+import re
 import shutil
 from .font_config import FontConfigManager
-from .steam_utils import SteamUtils
+from .replacement_backup import ReplacementBackup
+
+# Valve 原版 42-repl-global.conf 只是带占位符的替换模板，被本工具改写后不再包含它
+STOCK_GLOBAL_CONF_MARKER = "FONT TO REPLACE"
+# 原版 fonts.conf 只按文件名放行原版字体，本工具生成的版本会额外放行所有 .ttf
+TOOLKIT_FONT_PATTERN = ".ttf"
 
 
 class FontReplacer:
     # 字体替换器
 
-    def __init__(self, steam_library_path):
+    def __init__(self, steam_library_path, backup_root):
         self.steam_library_path = steam_library_path
         self.config_manager = FontConfigManager()
+        # 原版字体备份目录（位于数据目录内，随数据目录一起迁移）
+        self.backup_root = backup_root
 
     def validate_paths(self, font_path):
         # 验证路径有效性
@@ -96,6 +105,53 @@ class FontReplacer:
         except Exception as e:
             raise Exception(f"更新42-repl-global.conf文件失败: {str(e)}")
 
+    @staticmethod
+    def _read_text(path):
+        try:
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                return f.read()
+        except OSError:
+            return None
+
+    @staticmethod
+    def _font_patterns(fonts_conf):
+        return re.findall(r"<fontpattern>([^<]*)</fontpattern>", fonts_conf or "")
+
+    def _is_stock_state(self, fonts_dir, global_conf_path):
+        # 原版状态：fonts.conf 没有放行 .ttf，且 42-repl-global.conf 仍是 Valve 的占位模板
+        fonts_conf = self._read_text(os.path.join(fonts_dir, "fonts.conf"))
+        global_conf = self._read_text(global_conf_path)
+        return (
+            fonts_conf is not None
+            and global_conf is not None
+            and TOOLKIT_FONT_PATTERN not in self._font_patterns(fonts_conf)
+            and STOCK_GLOBAL_CONF_MARKER in global_conf
+        )
+
+    def _stock_font_files(self, fonts_dir):
+        # 原版 fonts.conf 只加载文件名匹配 fontpattern 的字体，其余文件是以前替换遗留的自定义字体
+        fonts_conf_path = os.path.join(fonts_dir, "fonts.conf")
+        patterns = [p.lower() for p in self._font_patterns(self._read_text(fonts_conf_path))]
+        files = [fonts_conf_path]
+        for name in os.listdir(fonts_dir):
+            path = os.path.join(fonts_dir, name)
+            if name != "fonts.conf" and os.path.isfile(path) and any(p in name.lower() for p in patterns):
+                files.append(path)
+        return files
+
+    def _backup_operation(self):
+        # 每个 CS2 安装目录各自保存一份原版字体基线
+        fonts_dir = os.path.normcase(os.path.abspath(self.get_fonts_directory()))
+        return "font-" + hashlib.sha1(fonts_dir.encode("utf-8")).hexdigest()[:12]
+
+    def _recover_pending_replacement(self, operation):
+        # 上次异常退出或回滚失败时保留的快照，必须恢复成功后才允许开始下一次操作。
+        rollback = ReplacementBackup.latest(self.backup_root, f"{operation}.rollback")
+        if rollback is not None:
+            rollback.restore()
+            os.remove(rollback.manifest_path)
+            shutil.rmtree(rollback.operation_dir, ignore_errors=True)
+
     def is_font_replacement_intact(self, font_path):
         if not font_path or not os.path.isfile(font_path):
             return False
@@ -107,33 +163,42 @@ class FontReplacer:
 
         font_filename = os.path.basename(font_path)
         expected_font_path = os.path.join(fonts_dir, font_filename)
-        fonts_conf_path = os.path.join(fonts_dir, "fonts.conf")
+        if not os.path.isfile(expected_font_path) or os.path.getsize(expected_font_path) != os.path.getsize(font_path):
+            return False
 
+        # 游戏更新或 Steam 验证文件会把两个配置还原为原版，只检查文件是否存在会漏判
+        font_name = self.extract_font_name(font_path)
         return (
-            os.path.isfile(expected_font_path)
-            and os.path.isfile(fonts_conf_path)
-            and os.path.isfile(global_conf_path)
+            self._read_text(os.path.join(fonts_dir, "fonts.conf")) == self.config_manager.generate_fonts_conf(font_name, font_filename)
+            and self._read_text(global_conf_path) == self.config_manager.generate_global_conf(font_name)
         )
 
-    def ensure_font_replaced(self, font_path, progress_callback=None):
-        if self.is_font_replacement_intact(font_path):
-            return {"success": True, "repaired": False}
-
-        result = self.replace_font(font_path, progress_callback)
-        if result.get("success"):
-            result["repaired"] = True
-        return result
-
     def restore_font(self):
+        # 恢复游戏默认字体。needs_verify 为 True 表示没有原版备份，需要通过 Steam 验证游戏文件补回原版字体
         try:
             fonts_dir = self.get_fonts_directory()
-            if fonts_dir and os.path.exists(fonts_dir):
-                self.clear_fonts_directory(fonts_dir)
-
             global_conf_path = self.get_global_conf_path()
-            if global_conf_path and os.path.exists(global_conf_path):
+            if not fonts_dir or not global_conf_path:
+                return {"success": False, "error": "CS2安装路径不存在！"}
+
+            operation = self._backup_operation()
+            self._recover_pending_replacement(operation)
+            baseline = ReplacementBackup.latest(self.backup_root, operation)
+            if baseline is not None:
+                baseline.restore()
+                shutil.rmtree(baseline.operation_dir, ignore_errors=True)
+                return {"success": True, "needs_verify": False}
+
+            if self._is_stock_state(fonts_dir, global_conf_path):
+                return {"success": True, "needs_verify": False}
+
+            # 没有原版备份（例如由旧版本替换的字体）：移除本工具写入的文件，原版文件交给 Steam 验证补回
+            if os.path.exists(fonts_dir):
+                self.clear_fonts_directory(fonts_dir)
+            global_conf = self._read_text(global_conf_path)
+            if global_conf is not None and STOCK_GLOBAL_CONF_MARKER not in global_conf:
                 os.remove(global_conf_path)
-            return {"success": True}
+            return {"success": True, "needs_verify": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -198,12 +263,44 @@ class FontReplacer:
         # 定义路径
         fonts_dir = self.get_fonts_directory()
         global_conf_path = self.get_global_conf_path()
+        font_target = os.path.join(fonts_dir, font_filename)
+
+        operation = self._backup_operation()
+        self._recover_pending_replacement(operation)
+        baseline = ReplacementBackup.latest(self.backup_root, operation)
+
+        if self._is_stock_state(fonts_dir, global_conf_path):
+            # 游戏更新只会补回有改动的文件，配置恢复原版时被删除的原版字体可能仍然缺失；
+            # 只有基线里的原版文件都已回来（首次替换或验证过文件）才用当前文件刷新基线。
+            if baseline is None or all(os.path.isfile(path) for path in baseline.backed_up_paths()):
+                stock_backup = ReplacementBackup(self.backup_root, operation)
+                for path in self._stock_font_files(fonts_dir):
+                    stock_backup.snapshot_file(path)
+                stock_backup.snapshot_file(global_conf_path)
+                stock_backup.commit()
+                if baseline is not None:
+                    shutil.rmtree(baseline.operation_dir, ignore_errors=True)
+                baseline = stock_backup
+
+        # 回滚始终恢复操作前的实际文件，包括只恢复了部分原版文件的状态。
+        # 写入前持久化快照，失败时也不能删除尚未恢复的备份。
+        rollback = ReplacementBackup(self.backup_root, f"{operation}.rollback")
+        rollback.snapshot_directory(fonts_dir)
+        rollback.snapshot_file(os.path.join(fonts_dir, "fonts.conf"))
+        rollback.snapshot_file(global_conf_path)
+        rollback.snapshot_file(font_target)
+        rollback.commit()
 
         try:
             # 步骤1: 清空fonts目录
             if progress_callback:
                 progress_callback("清空fonts目录...")
             self.clear_fonts_directory(fonts_dir)
+
+            # 新字体文件由本工具创建：记入基线，恢复默认字体时删除
+            if baseline is not None:
+                baseline.snapshot_file(font_target)
+                baseline.commit()
 
             # 步骤2: 复制字体文件
             if progress_callback:
@@ -223,6 +320,8 @@ class FontReplacer:
             if progress_callback:
                 progress_callback("字体替换完成！")
 
+            os.remove(rollback.manifest_path)
+            shutil.rmtree(rollback.operation_dir, ignore_errors=True)
             return {
                 "success": True,
                 "font_name": font_name,
@@ -230,6 +329,15 @@ class FontReplacer:
             }
 
         except Exception as e:
+            try:
+                rollback.restore()
+                os.remove(rollback.manifest_path)
+                shutil.rmtree(rollback.operation_dir, ignore_errors=True)
+            except Exception as restore_error:
+                return {
+                    "success": False,
+                    "error": f"{e}; 回滚字体替换失败: {restore_error}",
+                }
             if progress_callback:
                 progress_callback("操作失败")
             return {

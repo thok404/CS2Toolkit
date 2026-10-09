@@ -43,7 +43,11 @@ class FontPage(QWidget):
         file_layout.addWidget(self.font_filename_label)
 
         self.execute_font_btn = PrimaryPushButton("替换字体")
-        file_layout.addWidget(self.execute_font_btn)
+        self.restore_font_btn = PushButton("恢复默认字体")
+        action_layout = QHBoxLayout()
+        action_layout.addWidget(self.execute_font_btn, 1)
+        action_layout.addWidget(self.restore_font_btn)
+        file_layout.addLayout(action_layout)
         layout.addWidget(file_card)
 
         # 字体预设 (Card)
@@ -68,6 +72,7 @@ class FontPage(QWidget):
     def _connect_signals(self):
         self.browse_font_btn.clicked.connect(self.parent.browse_font_file)
         self.execute_font_btn.clicked.connect(self.parent.execute_font_replace)
+        self.restore_font_btn.clicked.connect(self.parent.restore_default_font)
         self.save_font_preset_btn.clicked.connect(self.parent.save_font_preset)
         self.font_preset_list.itemDoubleClicked.connect(self.parent.apply_font_preset_from_item)
     

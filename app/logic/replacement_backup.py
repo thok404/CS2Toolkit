@@ -154,6 +154,11 @@ class ReplacementBackup:
             for name in file_names:
                 self.snapshot_file(Path(current) / name)
 
+    def backed_up_paths(self) -> list[str]:
+        """Return the target paths whose original bytes this snapshot holds."""
+
+        return [entry["path"] for entry in self._entries.values() if entry.get("existed")]
+
     def record_created(self, path: str | os.PathLike[str]) -> None:
         """Record a generated path when its absence was not snapshotted first."""
 

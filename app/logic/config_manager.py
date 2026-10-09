@@ -30,6 +30,7 @@ class ConfigManager:
         self.presets_file = os.path.join(self.work_dir, "preconfig.json")
         self.thumbnails_dir = os.path.join(self.work_dir, "thumbnails")
         self.configs_dir = os.path.join(self.work_dir, "configs")
+        self.replacement_backups_dir = os.path.join(self.work_dir, "replacement_backups")
 
         self.config = {
             "video_presets": [],

@@ -463,8 +463,17 @@ class VisualPage(ScrollArea):
         self._init_config()
         self._setup_ui()
 
+    @property
+    def visual_config(self):
+        # 始终读取配置中当前的 visual 字典。首页总开关、导入配置和重置都会替换该对象，
+        # 若页面持有旧引用，后续切换开关会把对话框中刚选好的图片路径覆盖掉。
+        self._init_config()
+        return self.config_manager.get('visual')
+
     def _init_config(self):
-        self.visual_config = self.config_manager.get('visual', {
+        if isinstance(self.config_manager.get('visual'), dict):
+            return
+        self.config_manager.set('visual', {
             'visual_master_enabled': True,
             'flash_enabled': False,
             'flash_path': '',
