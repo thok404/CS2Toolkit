@@ -18,7 +18,8 @@ from app.logic.gsi_manager import GSIManager
 from app.logic.visual_handler import VisualHandler
 from app.logic.go_pet_manager import GoPetManager
 from app.logic.launch_manager import LaunchManager
-from app.release_endpoints import UPDATE_URL
+from app.release_endpoints import FORK_REPO_URL, FORK_NOTICE
+from app.logic.update_checker import check_fork_update
 from app.ui.animations import AnimationManager
 from app.ui.fluent_dialogs import TextInputDialog
 from app.ui.pages.home_page import HomePage
@@ -39,7 +40,7 @@ class CS2Tool(FluentWindow):
     def __init__(self):
         super().__init__()
         self.version = "1.5.0"
-        self.repo_url = "https://github.com/clover-233/CS2Toolkit"
+        self.repo_url = FORK_REPO_URL
         self.is_dark_mode = False
         self._force_quit = False
         self.config_manager = ConfigManager()
@@ -160,7 +161,7 @@ class CS2Tool(FluentWindow):
 
     def _deferred_startup_tasks(self):
         self.auto_detect_steam()
-        self.check_for_updates()
+        self.check_for_updates(silent=True)
 
         # 启动 GSI Server（路径和配置生成已转移到 _perform_steam_detection 和 browse_steam 中处理）
         self.gsi_manager.start_server()
@@ -993,45 +994,32 @@ class CS2Tool(FluentWindow):
         dialog.exec()
         self.update_recent_activity("查看音效替换教程")
 
-    def check_for_updates(self):
-        thread = threading.Thread(target=self._update_check_thread, daemon=True)
+    def check_for_updates(self, checked=False, *, silent=False):
+        thread = threading.Thread(target=self._update_check_thread, args=(silent,), daemon=True)
         thread.start()
 
-    def _update_check_thread(self):
-        import requests
-        current_version = self.version
-        try:
-            proxies = {
-              "http": None,
-              "https": None,
-            }
-            response = requests.get(UPDATE_URL, timeout=5, proxies=proxies)
-            if response.status_code == 200:
-                latest_version_data = response.json()
-                latest_version = latest_version_data.get("version")
-                if latest_version and latest_version != current_version:
-                    self.update_signal_emitter.update_found.emit(latest_version_data)
-                elif latest_version and latest_version == current_version:
-                    self.update_signal_emitter.update_found.emit({"version": latest_version, "is_latest": True})
-        except requests.RequestException as e:
-            print(f"检查更新失败: {e}")
+    def _update_check_thread(self, silent=False):
+        result = check_fork_update(self.version)
+        if not silent or result["status"] == "update":
+            self.update_signal_emitter.update_found.emit(result)
 
     def show_update_dialog(self, version_data):
-        # json文件格式
-        # {
-        #   "version": "最新的版本号(✪ω✪)",
-        #   "update_log": "更新日志的具体说明(*^▽^*)",
-        #   "download_url": "下载链接o(´^｀)o"
-        # }
-        if version_data.get("is_latest", False):
-            self.show_info("检查更新", "当前已是最新版本")
+        status = version_data.get("status")
+        if status == "latest":
+            self.show_info("检查 fork 更新", "fork 暂无比当前版本更新的正式发布。")
+            return
+        if status == "unpublished":
+            self.show_info("检查 fork 更新", "thok404/CS2Toolkit 尚未发布正式版本。可在“关于”页打开 fork 仓库查看。")
+            return
+        if status == "error":
+            self.show_warning("检查 fork 更新失败", version_data.get("message", "请稍后重试。"))
             return
         latest_version = version_data.get("version", "N/A")
         update_log = version_data.get("update_log", "无更新日志。")
         download_url = version_data.get("download_url", "")
 
-        title = f"发现新版本: {latest_version}"
-        content = f"检测到新版本，是否立即更新？\n\n更新日志:\n{update_log}"
+        title = f"发现 fork 新版本: {latest_version}"
+        content = f"检测到 thok404/CS2Toolkit 新版本，是否前往下载？\n\n{FORK_NOTICE}\n\n更新日志:\n{update_log}"
 
         msg_box = MessageBox(title, content, self)
         msg_box.yesButton.setText("立即更新")
@@ -1041,7 +1029,7 @@ class CS2Tool(FluentWindow):
             if download_url:
                 QDesktopServices.openUrl(QUrl(download_url))
         else:
-            self.show_warning("已忽略更新", "您拒绝更新到最新版本，在此版本中遇到任何问题请勿向作者报告！")
+            self.show_info("已忽略更新", "可以稍后在“关于”页重新检查 fork 更新。")
 
     def closeEvent(self, event):
         if self._force_quit:

@@ -1,4 +1,4 @@
 {
-  "update_url": "https://gitee.com/your-account/your-repo/raw/master/version.json",
-  "announcement_url": "https://gitee.com/your-account/your-repo/raw/master/announcement.json"
+  "update_url": "https://api.github.com/repos/thok404/CS2Toolkit/releases/latest",
+  "announcement_url": ""
 }

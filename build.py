@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import zipfile
+from app.release_endpoints import FORK_NOTICE, FORK_REPO_URL, UPSTREAM_REPO_URL
 
 
 def remove_readonly(func, path, excinfo):
@@ -68,19 +69,16 @@ def inject_release_endpoints(project_root, update_url, announcement_url):
     with open(file_path, "r", encoding="utf-8") as f:
         original_content = f.read()
 
-    if update_url and announcement_url:
-        replaced_content = re.sub(
-            r'^UPDATE_URL\s*=\s*".*"$',
-            f'UPDATE_URL = "{update_url}"',
-            original_content,
-            flags=re.MULTILINE
-        )
-        replaced_content = re.sub(
-            r'^ANNOUNCEMENT_URL\s*=\s*".*"$',
-            f'ANNOUNCEMENT_URL = "{announcement_url}"',
-            replaced_content,
-            flags=re.MULTILINE
-        )
+    if update_url or announcement_url:
+        replaced_content = original_content
+        for name, value in (("UPDATE_URL", update_url), ("ANNOUNCEMENT_URL", announcement_url)):
+            if value:
+                replaced_content = re.sub(
+                    rf'^{name}\s*=\s*".*"$',
+                    lambda _match, name=name, value=value: f"{name} = {json.dumps(value)}",
+                    replaced_content,
+                    flags=re.MULTILINE,
+                )
         with open(file_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(replaced_content)
 
@@ -109,10 +107,10 @@ def build_exe():
     sponsorship_path = os.path.join(project_root, "sponsorship.jpg")
     update_url, announcement_url = load_release_endpoints(project_root)
     print(f"准备编译版本: {output_filename}")
-    if update_url and announcement_url:
+    if update_url or announcement_url:
         print("已注入本地更新与公告链接")
     else:
-        print("未提供本地更新与公告链接，使用仓库占位符")
+        print("使用 fork 仓库默认的 GitHub Releases 更新源")
 
     endpoints_file_path, original_endpoints_content = inject_release_endpoints(
         project_root, update_url, announcement_url
@@ -165,6 +163,11 @@ def build_exe():
                 sys.exit(1)
 
         os.makedirs(package_root, exist_ok=True)
+        with open(os.path.join(package_root, "FORK_NOTICE.txt"), "w", encoding="utf-8") as notice:
+            notice.write(
+                f"CS2Toolkit v{version}\n\n{FORK_NOTICE}\n\n"
+                f"fork 源码与更新：{FORK_REPO_URL}\n原项目：{UPSTREAM_REPO_URL}\n"
+            )
         shutil.move(build_output_dir, runtime_dir)
 
         runtime_exe_path = os.path.join(runtime_dir, exe_name)

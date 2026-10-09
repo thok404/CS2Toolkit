@@ -2,6 +2,10 @@
 
 一个面向 `Counter-Strike 2` 的 Windows 桌面工具，提供游戏资源替换、GSI 实时事件联动、视觉覆盖和 `GO桌宠` 等功能。
 
+本仓库是 [thok404/CS2Toolkit](https://github.com/thok404/CS2Toolkit) 维护的 fork 修复版，基于 [clover-233/CS2Toolkit](https://github.com/clover-233/CS2Toolkit)。原作者为 Moon4Quartz。
+
+**本版本遇到的问题请反馈到 thok404/CS2Toolkit，不要联系原作者。** 本版本的更新检查仅以此 fork 的发布版本为准。
+
 ## 项目状态
 
 - 技术栈：`Python`、`PySide6`、`PySide6-Fluent-Widgets`
@@ -155,26 +159,26 @@ CS2Toolkit/
 
 发布前请参考 [OPEN_SOURCE_RELEASE_CHECKLIST.zh-CN.md](./OPEN_SOURCE_RELEASE_CHECKLIST.zh-CN.md) 逐项检查。
 
-## 私有更新源注入
+## fork 更新检查与公告
 
-仓库默认不写入正式的公告源和版本检测地址。
+软件默认通过 GitHub Releases 检查 `thok404/CS2Toolkit` 的最新正式发布，读取发布标签、说明和便携包下载链接。仅当发布版本比当前版本更新时才提示下载，未发布 Release 时会在手动检查中说明。
 
-- `app/release_endpoints.py` 中保留的是公开仓库可提交的占位符
-- 本地正式打包时，可通过私有配置文件或环境变量注入真实地址
-- 打包完成后，`build.py` 会自动将源码恢复为占位符，避免误提交真实链接
+首页默认显示 fork 说明。“关于”页和便携包内的 `FORK_NOTICE.txt` 也注明反馈归属。
 
-推荐方式：
+如需本地覆盖更新或公告源：
 
 1. 复制 `release_endpoints.local.example.json`
 2. 重命名为 `release_endpoints.local.json`
-3. 按你的实际地址填写：
+3. 按你的实际地址填写（更新源须兼容 GitHub Releases 响应格式，公告源使用 `title`/`content` JSON）：
 
 ```json
 {
-  "update_url": "example.com/version.json",
-  "announcement_url": "example.com/announcement.json"
+  "update_url": "https://api.github.com/repos/thok404/CS2Toolkit/releases/latest",
+  "announcement_url": ""
 }
 ```
+
+也可使用 `CS2TOOLKIT_UPDATE_URL`、`CS2TOOLKIT_ANNOUNCEMENT_URL` 环境变量。打包后会还原源文件中的默认地址，本地覆盖值不会写入提交。
 
 ## 已知边界
 

@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from qfluentwidgets import TitleLabel, BodyLabel, PushButton, MessageBoxBase, SubtitleLabel
-from app.release_endpoints import DONATION_MARKDOWN_URL
+from app.release_endpoints import DONATION_MARKDOWN_URL, FORK_NOTICE, FORK_REPO_URL, UPSTREAM_REPO_URL
 
 
 class SponsorshipDialog(MessageBoxBase):
@@ -67,15 +67,23 @@ class AboutPage(QWidget):
         about_text.setText("""
 这是一个为CS2设计的多功能软件，可自定义开屏动画、音效、游戏字体与实时播放音效，其他功能还在积极开发中，敬请期待！(｡･ω･｡)<br><br>
 <b>版本: {version}</b><br>
-作者: Moon4Quartz<br>
-作者主页: <a href="https://space.bilibili.com/3537124972300357">https://space.bilibili.com/3537124972300357</a><br>
-开源地址: <a href="{repo_url}">{repo_url}</a><br>
+fork 维护者: thok404<br>
+fork 仓库与更新: <a href="{repo_url}">{repo_url}</a><br>
+原作者: Moon4Quartz<br>
+原项目: <a href="{upstream_url}">{upstream_url}</a><br>
 许可证: GPLv3<br>
 免责: 本项目按现状提供，不附带任何担保<br>
 声明: 本项目与 Valve 无关联，相关商标归其各自权利人所有<br>
-""".format(version=self.parent.version, repo_url=self.parent.repo_url))
+""".format(version=self.parent.version, repo_url=self.parent.repo_url, upstream_url=UPSTREAM_REPO_URL))
         about_text.setOpenExternalLinks(True)
         layout.addWidget(about_text, 0, Qt.AlignTop)
+
+        self.fork_notice = BodyLabel(self)
+        self.fork_notice.setWordWrap(True)
+        self.fork_notice.setTextFormat(Qt.RichText)
+        self.fork_notice.setText(f'<b>{FORK_NOTICE}</b><br><a href="{FORK_REPO_URL}">打开 fork 仓库</a>')
+        self.fork_notice.setOpenExternalLinks(True)
+        layout.addWidget(self.fork_notice, 0, Qt.AlignTop)
 
         self.check_update_btn = PushButton("检查更新")
         layout.addWidget(self.check_update_btn, 0, Qt.AlignTop)
@@ -85,7 +93,7 @@ class AboutPage(QWidget):
             self.sponsorship_btn = PushButton("赞赏支持")
             layout.addWidget(self.sponsorship_btn, 0, Qt.AlignTop)
 
-        self.donation_title = SubtitleLabel("捐赠列表", self)
+        self.donation_title = SubtitleLabel("原项目捐赠列表", self)
         self.donation_content = BodyLabel("正在从外部 Markdown 获取捐赠名单...", self)
         self.donation_content.setWordWrap(True)
         self.donation_content.setTextFormat(Qt.RichText)

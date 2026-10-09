@@ -1,3 +1,6 @@
-UPDATE_URL = "https://gitee.com/clover23333/CS2-ToolKit/raw/master/version.json"
-ANNOUNCEMENT_URL = "https://gitee.com/clover23333/CS2-ToolKit/raw/master/announcement.json"
+FORK_REPO_URL = "https://github.com/thok404/CS2Toolkit"
+UPSTREAM_REPO_URL = "https://github.com/clover-233/CS2Toolkit"
+UPDATE_URL = "https://api.github.com/repos/thok404/CS2Toolkit/releases/latest"
+ANNOUNCEMENT_URL = ""
+FORK_NOTICE = "本版本是 thok404 维护的 fork 修复版。本版本遇到的问题请反馈到 thok404/CS2Toolkit，不要联系原作者。"
 DONATION_MARKDOWN_URL = "https://gitee.com/clover23333/CS2-ToolKit/raw/master/donations.md"

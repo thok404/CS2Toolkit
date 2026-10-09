@@ -19,7 +19,7 @@ from qfluentwidgets import (
     isDarkTheme,
 )
 
-from app.release_endpoints import ANNOUNCEMENT_URL
+from app.release_endpoints import ANNOUNCEMENT_URL, FORK_NOTICE
 from app.logic.launch_manager import LaunchManager
 from ..styles import UIStyles
 
@@ -314,6 +314,9 @@ class HomePage(ScrollArea):
         self.update_status()
 
     def _fetch_announcement(self):
+        if not ANNOUNCEMENT_URL:
+            self.announcement_fetched.emit("fork 修复版说明", FORK_NOTICE)
+            return
         def fetch_task():
             try:
                 proxies = {"http": None, "https": None}
