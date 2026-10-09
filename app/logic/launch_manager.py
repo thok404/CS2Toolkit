@@ -3,6 +3,7 @@ import os
 import subprocess
 
 from .steam_utils import SteamUtils
+from .cs2_window import find_cs2_window
 
 
 class LaunchManager:
@@ -22,8 +23,7 @@ class LaunchManager:
             pass
 
         try:
-            user32 = ctypes.windll.user32
-            return bool(user32.FindWindowW(None, "Counter-Strike 2"))
+            return bool(find_cs2_window())
         except Exception:
             return False
 

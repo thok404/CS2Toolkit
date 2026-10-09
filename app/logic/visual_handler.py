@@ -11,6 +11,7 @@ from PySide6.QtGui import QPixmap, QColor, QMovie
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from .audio_session_controller import AudioSessionController
+from .cs2_window import find_cs2_window
 
 class VisualSignals(QObject):
     update_flash = Signal(int)
@@ -138,7 +139,7 @@ class OverlayWindow(QWidget):
 
     def _check_game_focus(self):
         user32 = ctypes.windll.user32
-        cs2_hwnd = user32.FindWindowW(None, "Counter-Strike 2")
+        cs2_hwnd = find_cs2_window()
         fg_hwnd = user32.GetForegroundWindow()
 
         if not cs2_hwnd or cs2_hwnd != fg_hwnd:
@@ -150,7 +151,7 @@ class OverlayWindow(QWidget):
 
     def _update_geometry_to_game(self):
         user32 = ctypes.windll.user32
-        hwnd = user32.FindWindowW(None, "Counter-Strike 2")
+        hwnd = find_cs2_window()
         if hwnd:
             from ctypes import wintypes
             rect = wintypes.RECT()
@@ -686,7 +687,7 @@ class VisualHandler(QObject):
 
     def _minimize_cs2(self):
         user32 = ctypes.windll.user32
-        hwnd = user32.FindWindowW(None, "Counter-Strike 2")
+        hwnd = find_cs2_window()
         if hwnd:
             # 最小化之前，先解除鼠标锁定（如果是独占模式可能需要）
             user32.ClipCursor(None)
@@ -699,7 +700,7 @@ class VisualHandler(QObject):
 
     def _restore_cs2(self):
         user32 = ctypes.windll.user32
-        hwnd = user32.FindWindowW(None, "Counter-Strike 2")
+        hwnd = find_cs2_window()
         if hwnd:
             # 强制解除当前可能的其他窗口置顶状态
             from ctypes import wintypes
