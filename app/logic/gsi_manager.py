@@ -236,7 +236,11 @@ class GSIManager:
             return False
 
         self._is_starting = True
-        self._server_thread = threading.Thread(target=self._server_target, daemon=True)
+        self._server_thread = threading.Thread(
+            target=self._server_target,
+            args=(self.current_host, self.current_port),
+            daemon=True,
+        )
         self._server_thread.start()
         return True
 
