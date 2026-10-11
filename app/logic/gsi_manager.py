@@ -2,13 +2,20 @@ import os
 import json
 import threading
 import socket
+import errno
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from .gsi_sound_handler import GSISoundHandler
 
 class ReusableHTTPServer(ThreadingMixIn, HTTPServer):
-    allow_reuse_address = True
+    # Windows 的 SO_REUSEADDR 允许多个进程争用同一个端口，改为独占监听。
+    allow_reuse_address = os.name != 'nt'
     daemon_threads = True
+
+    def server_bind(self):
+        if os.name == 'nt':
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 class GSIHandler(BaseHTTPRequestHandler):
     # 处理GSI POST请求
@@ -52,6 +59,7 @@ class GSIManager:
         self._server_thread = None
         self._httpd = None
         self._is_starting = False
+        self._stop_requested = threading.Event()
         self.data_callback = None
         self.current_port = 3000  # 当前使用的端口
         self.current_host = '127.0.0.1'  # 当前使用的主机
@@ -157,62 +165,49 @@ class GSIManager:
         if self.sound_handler:
             self.sound_handler.test_sound(sound_type)
 
-    def _check_port_available(self, host, port):
-        # 检查端口是否可用
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(1)
-                result = sock.connect_ex((host, port))
-                return result != 0
-        except Exception:
-            return False
-
-    def _find_available_port(self, host='127.0.0.1', start_port=3000, max_attempts=10):
-        # 查找可用端口
-        for port in range(start_port, start_port + max_attempts):
-            if self._check_port_available(host, port):
-                return port
-        return None
+    def _bind_server(self, host, port):
+        # 真正绑定并保留监听 socket，避免探测与启动之间的竞争。
+        # 相邻端口整段被保留时，让系统选择可绑定端口（0）。
+        candidates = list(range(port, min(port + 10, 65536))) + [0]
+        last_error = None
+        for candidate in candidates:
+            if self._stop_requested.is_set():
+                return None
+            try:
+                return ReusableHTTPServer((host, candidate), GSIHandler)
+            except OSError as error:
+                if (error.errno not in (errno.EACCES, errno.EADDRINUSE)
+                        and getattr(error, 'winerror', None) not in (10013, 10048)):
+                    raise
+                last_error = error
+        raise OSError(f"已尝试配置端口、相邻端口和系统分配端口，均无法监听：{last_error}")
 
     def _server_target(self, host='127.0.0.1', port=3000):
-        # 检查指定端口是否可用，如果不可用则自动寻找其他端口
-        if not self._check_port_available(host, port):
-            print(f"端口 {port} 已被占用，正在寻找其他可用端口...")
-            available_port = self._find_available_port(host, port)
-            if available_port is None:
-                error_msg = f"无法找到可用端口（尝试范围：{port}-{port+9}），请检查是否有其他程序（如其他辅助软件）占用了大量端口。"
-                print(error_msg)
-                if self.data_callback:
-                    error_info = {"error": "server_start_failed", "message": error_msg}
-                    self.data_callback(json.dumps(error_info).encode('utf-8'))
-                return
-
-            # 如果自动更换了端口，通知UI提示用户需要重新生成CFG
-            if self.data_callback:
-                warning_info = {"warning": "port_changed", "old_port": port, "new_port": available_port}
-                self.data_callback(json.dumps(warning_info).encode('utf-8'))
-
-            port = available_port
-            print(f"找到可用端口：{port}")
-
-        # 更新当前使用的端口和主机
-        self.current_port = port
-        self.current_host = host
-
+        server = None
         try:
-            server_address = (host, port)
-            self._httpd = ReusableHTTPServer(server_address, GSIHandler)
+            server = self._bind_server(host, port)
+            if server is None or self._stop_requested.is_set():
+                return
+            self.current_port = server.server_address[1]
+            self.current_host = host
+            cfg_updated, cfg_message = self.create_gsi_cfg() if self.cs2_path else (False, "CS2路径尚未设置")
             # 将回调函数传递给服务器实例，以便GSIHandler可以访问它
-            self._httpd.data_callback = self.data_callback
+            server.data_callback = self.data_callback
+            if self._stop_requested.is_set():
+                return
+            self._httpd = server
             self._is_starting = False
-            print(f"GSI服务器已在 {host}:{port} 上启动...")
+            print(f"GSI服务器已在 {host}:{self.current_port} 上启动...")
 
             # 通知UI服务器启动成功
             if self.data_callback:
-                success_info = {"success": "server_started", "port": port, "host": host}
+                success_info = {
+                    "success": "server_started", "port": self.current_port, "host": host,
+                    "requested_port": port, "cfg_updated": cfg_updated, "cfg_message": cfg_message,
+                }
                 self.data_callback(json.dumps(success_info).encode('utf-8'))
 
-            self._httpd.serve_forever()
+            server.serve_forever()
         except OSError as e:
             self._is_starting = False
             print(f"无法启动GSI服务器: {e}")
@@ -227,8 +222,11 @@ class GSIManager:
                 error_info = {"error": "server_unexpected_error", "message": str(e)}
                 self.data_callback(json.dumps(error_info).encode('utf-8'))
         finally:
-            if self._httpd is None:
-                self._is_starting = False
+            if server is not None:
+                server.server_close()
+            if self._httpd is server:
+                self._httpd = None
+            self._is_starting = False
 
     def start_server(self):
         if self._is_starting or (self._server_thread and self._server_thread.is_alive()):
@@ -236,6 +234,7 @@ class GSIManager:
             return False
 
         self._is_starting = True
+        self._stop_requested.clear()
         self._server_thread = threading.Thread(
             target=self._server_target,
             args=(self.current_host, self.current_port),
@@ -245,15 +244,16 @@ class GSIManager:
         return True
 
     def stop_server(self):
+        self._stop_requested.set()
         self._is_starting = False
-        if self._httpd:
+        server = self._httpd
+        if server:
             print("正在关闭GSI服务器...")
-            self._httpd.shutdown()
-            self._httpd.server_close()
-            self._httpd = None
+            server.shutdown()
         if self._server_thread and self._server_thread.is_alive():
             self._server_thread.join(timeout=1)
-        self._server_thread = None
+        if not self._server_thread or not self._server_thread.is_alive():
+            self._server_thread = None
         print("GSI服务器已停止。")
 
     def is_running(self):

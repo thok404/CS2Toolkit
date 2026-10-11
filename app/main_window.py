@@ -39,7 +39,7 @@ class UpdateSignalEmitter(QObject):
 class CS2Tool(FluentWindow):
     def __init__(self):
         super().__init__()
-        self.version = "1.5.0"
+        self.version = "1.5.1"
         self.repo_url = FORK_REPO_URL
         self.is_dark_mode = False
         self._force_quit = False
@@ -546,16 +546,6 @@ class CS2Tool(FluentWindow):
              self.show_error("GSI服务启动失败", f"{game_state.get('message', '无法启动服务器')}\n请在设置页检查端口是否被占用，或尝试更改端口。")
              return
 
-        # 处理端口自动更换警告
-        if "warning" in game_state and game_state["warning"] == "port_changed":
-            old_port = game_state.get("old_port")
-            new_port = game_state.get("new_port")
-            self.config_manager.set("gsi_port", new_port)
-            self.show_warning("GSI端口被占用", f"原端口 {old_port} 被占用，已自动切换至 {new_port}。\n请前往【设置-高级】点击「重新生成GSI配置」并重启游戏，否则音效将失效！", duration=10000)
-            if hasattr(self, 'setting_tab') and hasattr(self.setting_tab, 'gsi_port_input'):
-                self.setting_tab.gsi_port_input.setText(str(new_port))
-            return
-
         # 处理服务器启动成功
         if "success" in game_state and game_state["success"] == "server_started":
             port = game_state.get("port", "未知")
@@ -568,11 +558,20 @@ class CS2Tool(FluentWindow):
 
             # 更新设置页的UI状态
             if hasattr(self, 'setting_tab') and hasattr(self.setting_tab, 'gsi_toggle_btn'):
+                self.setting_tab.gsi_port_input.setText(str(port))
                 self.setting_tab.gsi_toggle_btn.setText("停止服务")
                 self.setting_tab.gsi_toggle_btn.setEnabled(True)
                 self.setting_tab.gsi_port_input.setEnabled(False)
 
-            self.show_success("GSI服务启动成功", f"服务已在 {host}:{port} 端口上开启")
+            requested_port = game_state.get("requested_port", port)
+            if requested_port != port:
+                if game_state.get("cfg_updated"):
+                    details = "已自动更新 GSI 配置。若游戏已启动，请重启游戏使新端口生效。"
+                else:
+                    details = "请确认 CS2 路径后重新生成 GSI 配置，再重启游戏。"
+                self.show_warning("GSI已自动更换端口", f"端口 {requested_port} 被占用或不允许监听，服务已在 {port} 启动。\n{details}", duration=10000)
+            else:
+                self.show_success("GSI服务启动成功", f"服务已在 {host}:{port} 端口上开启")
             return
 
         # 处理其他错误
