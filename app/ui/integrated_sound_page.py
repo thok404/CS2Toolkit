@@ -15,6 +15,7 @@ import time
 from .components import EventConfigWidget
 from .event_dialog import AddEventDialog
 from ..logic.sound_player import SoundPlayer
+from ..logic.gsi_state import PlayerEventTracker, is_observing
 from .styles import UIStyles
 
 DEBUG_GSI_LOG = False
@@ -40,6 +41,7 @@ class IntegratedSoundPage(QWidget):
         self.parent = parent
         self.sound_player = SoundPlayer()
         self.previous_weapon_states = {}  # 存储之前的武器状态
+        self._player_events = PlayerEventTracker()
         self.current_pack_path = None
 
         # 观战状态跟踪变量
@@ -79,7 +81,7 @@ class IntegratedSoundPage(QWidget):
         header_layout = QHBoxLayout()
         header_layout.addWidget(TitleLabel("实时音效管理"))
 
-        notice_label = BodyLabel("💡首次使用或修改端口后需【重启游戏】生效。\n注意：热身阶段可能无效，正常现象。")
+        notice_label = BodyLabel("通用事件根据 GSI 数据触发，适用于不同游戏模式。\n首次创建 GSI 配置后，请重启游戏一次。")
         notice_label.setStyleSheet("color: #d4a373; font-size: 12px;")
         header_layout.addStretch()
         header_layout.addWidget(notice_label)
@@ -491,6 +493,7 @@ class IntegratedSoundPage(QWidget):
 
     def process_game_state(self, game_state: dict):
         """处理游戏状态数据"""
+        self._player_update = self._player_events.update(game_state)
         if self.config_manager and not self.config_manager.get("gsi_enabled", True):
             return
 
@@ -499,35 +502,18 @@ class IntegratedSoundPage(QWidget):
             return
 
         # Get observation status properly using the existing logic
-        spectarget = player.get('spectarget')
-        activity = player.get('activity', '')
         player_state = player.get('state', {})
         is_alive = player_state.get('health', 0) > 0
-        observer_slot = player.get('observer_slot')
-
-        provider = game_state.get('provider', {})
-        provider_steamid = provider.get('steamid')
-        player_steamid = player.get('steamid')
-
-        has_valid_team = player.get('team', '') in ['T', 'CT']
-
-        # More robust spectator detection:
-        # If the provider's steamid doesn't match the player's steamid in the payload,
-        # it definitively means we are spectating someone else.
-        is_observing = False
-        if provider_steamid and player_steamid and provider_steamid != player_steamid:
-            is_observing = True
-        elif spectarget is not None or activity == 'spectating' or not has_valid_team:
-            is_observing = True
+        observing = self._player_update.observing
 
         # Do not process any events if we are observing someone else
-        if is_observing:
+        if observing:
             # We still want to update our internal tracking state to not falsely trigger on respawn
             match_stats = player.get('match_stats', {})
             self.previous_kills = match_stats.get('kills', 0)
             self.previous_deaths = match_stats.get('deaths', 0)
             self.previous_round_phase = game_state.get('round', {}).get('phase', '')
-            self.previous_observing_state = is_observing
+            self.previous_observing_state = observing
             self.previous_is_alive = is_alive
             return
 
@@ -536,6 +522,24 @@ class IntegratedSoundPage(QWidget):
 
         # 处理C4和击杀事件
         self._process_bomb_and_kill_events(game_state, player)
+
+    def reset_game_state(self):
+        self._player_events.reset()
+        self.previous_weapon_states.clear()
+        self.previous_kills = 0
+        self.previous_deaths = 0
+        self.previous_health = 100
+        self.previous_is_alive = True
+        self.previous_round_phase = None
+        self.previous_observer_slot = None
+        self.previous_observing_state = False
+        self.previous_bomb_state = ''
+        self.previous_grenade_ammo = {}
+        self.last_grenade_throw_time.clear()
+        self.round_kills = 0
+        for attribute in ('_current_active_weapon', '_last_active_weapon', '_last_fired_weapon', '_last_switch_time'):
+            if hasattr(self, attribute):
+                delattr(self, attribute)
 
     def _process_weapon_events(self, game_state: dict, player: dict):
         # 检查武器事件
@@ -634,8 +638,9 @@ class IntegratedSoundPage(QWidget):
 
         # 获取当前状态信息
         match_stats = player.get('match_stats', {})
-        current_kills = match_stats.get('kills', 0)
-        current_deaths = match_stats.get('deaths', 0)
+        current_kills = self.previous_kills + self._player_update.kills
+        current_deaths = self.previous_deaths + int(self._player_update.died)
+        self.round_kills = max(0, self._player_update.kill_count - self._player_update.kills)
 
         # Tracking grenade ammo
         weapons = player.get('weapons', {})
@@ -679,11 +684,7 @@ class IntegratedSoundPage(QWidget):
         # 3. 活动状态不是游玩 或
         # 4. 没有有效队伍（可能是观战者）
         # 注意：不要将死亡状态直接判断为观战，因为死亡时仍需要触发死亡音效
-        is_observing = (
-            spectarget is not None or  # 正在观战某个玩家
-            activity == 'spectating' or  # 活动状态为观战
-            not has_valid_team  # 没有有效队伍（可能是观战者）
-        )
+        observing = is_observing(game_state)
 
         # 添加详细的观战状态调试信息
         print(f"[GSI音效] 观战状态详细信息:")
@@ -691,36 +692,36 @@ class IntegratedSoundPage(QWidget):
         print(f"  - activity: {activity}")
         print(f"  - observer_slot: {observer_slot}")
         print(f"  - is_alive: {is_alive}")
-        print(f"  - 计算出的观战状态: {is_observing}")
+        print(f"  - 计算出的观战状态: {observing}")
         print(f"  - 上次观战状态: {self.previous_observing_state}")
         print(f"  - 击杀数: {current_kills}, 上次击杀数: {self.previous_kills}")
 
         # 检测观察位置变化：当observer_slot发生变化时，重置击杀数跟踪
-        if observer_slot != self.previous_observer_slot:
+        if observing and observer_slot != self.previous_observer_slot:
             print(f"[GSI音效] 检测到观察位置变化: {self.previous_observer_slot} -> {observer_slot}，重置击杀数跟踪")
             self.previous_kills = current_kills
             self.previous_deaths = current_deaths
             self.previous_observer_slot = observer_slot
             self.previous_round_phase = current_round_phase
-            self.previous_observing_state = is_observing
+            self.previous_observing_state = observing
             self.previous_health = current_health
             self.previous_is_alive = is_alive
             return  # 直接返回，避免在观察位置切换时触发音效
 
         # 检测观战状态变化：当观战状态发生变化时，重置击杀数跟踪
-        if is_observing != self.previous_observing_state:
-            print(f"[GSI音效] 检测到观战状态变化: {self.previous_observing_state} -> {is_observing}，重置击杀数跟踪")
+        if observing != self.previous_observing_state:
+            print(f"[GSI音效] 检测到观战状态变化: {self.previous_observing_state} -> {observing}，重置击杀数跟踪")
             self.previous_kills = current_kills
             self.previous_deaths = current_deaths
             self.previous_round_phase = current_round_phase
-            self.previous_observing_state = is_observing
+            self.previous_observing_state = observing
             self.previous_health = current_health
             self.previous_is_alive = is_alive
             self.previous_grenade_ammo = current_grenade_ammo
             return  # 直接返回，避免在观战状态切换时触发音效
 
         # 如果当前在观战状态，只处理死亡音效，跳过其他音效
-        skip_non_death_events = is_observing
+        skip_non_death_events = observing
         if skip_non_death_events:
             print(f"[GSI音效] 当前在观战状态，只处理死亡音效")
 
@@ -757,7 +758,7 @@ class IntegratedSoundPage(QWidget):
         if current_deaths != self.previous_deaths:
             print(f"[GSI音效] 死亡数变化: {self.previous_deaths} -> {current_deaths}")
             print(f"[GSI音效] 玩家存活: {is_alive}, 有效队伍: {has_valid_team}, 回合状态: {is_in_round}")
-            print(f"[GSI音效] 观战状态: {is_observing}, 观战位置: {observer_slot}, 观战目标: {spectarget}, 活动: {activity}")
+            print(f"[GSI音效] 观战状态: {observing}, 观战位置: {observer_slot}, 观战目标: {spectarget}, 活动: {activity}")
             print(f"[GSI音效] 玩家血量: {current_health}, 队伍: {player_team}, 回合阶段: {round_info.get('phase', 'unknown')}")
 
         # 检查基于存活状态的死亡事件（从存活变为死亡）
@@ -913,11 +914,12 @@ class IntegratedSoundPage(QWidget):
         round_bomb_state = game_state.get('round', {}).get('bomb', '')
         bomb_state = game_state.get('bomb', {}).get('state', '')
         self.previous_bomb_state = round_bomb_state or bomb_state
-        self.previous_observing_state = is_observing
+        self.previous_observing_state = observing
         self.previous_observer_slot = observer_slot
         self.previous_round_phase = current_round_phase
         self.previous_health = current_health
         self.previous_is_alive = is_alive
+        self.round_kills = self._player_update.kill_count
 
     def _play_kill_sound(self, event_type, weapon_name, kill_count):
         """播放击杀音效，支持高级连杀配置"""

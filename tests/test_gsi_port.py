@@ -65,6 +65,33 @@ class GSIPortTests(unittest.TestCase):
             self.assertIn(f"127.0.0.1:{port}", (cfg / "gamestate_integration_cs2toolkit.cfg").read_text())
             self.assert_endpoint(manager, port)
 
+    def test_existing_game_endpoint_is_reused_when_tool_starts_later(self):
+        with TemporaryDirectory() as temporary:
+            cfg = Path(temporary) / 'game/csgo/cfg'
+            cfg.mkdir(parents=True)
+            port = self.free_port()
+            (cfg / 'gamestate_integration_cs2toolkit.cfg').write_text(f'"uri" "http://127.0.0.1:{port}"')
+            manager = GSIManager()
+            manager.set_cs2_path(temporary, reuse_existing_endpoint=True)
+            self.assertEqual(manager.current_port, port)
+            self.assert_endpoint(manager, port)
+
+    def test_configuration_requests_map_and_frequent_reconnect(self):
+        content = GSIManager().get_gsi_cfg_content()
+        self.assertIn('"map" "1"', content)
+        self.assertIn('"heartbeat" "1.0"', content)
+
+    def test_repeated_path_detection_does_not_rewrite_current_cfg(self):
+        with TemporaryDirectory() as temporary:
+            cfg = Path(temporary) / 'game/csgo/cfg'
+            cfg.mkdir(parents=True)
+            manager = GSIManager(temporary)
+            self.assertTrue(manager.create_gsi_cfg()[0])
+            file = cfg / 'gamestate_integration_cs2toolkit.cfg'
+            before = file.stat().st_mtime_ns
+            self.assertTrue(manager.create_gsi_cfg()[0])
+            self.assertEqual(file.stat().st_mtime_ns, before)
+
     def test_stopping_and_changing_port_restarts_on_new_endpoint(self):
         manager = GSIManager()
         first = self.free_port()

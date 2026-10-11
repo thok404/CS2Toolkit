@@ -11,7 +11,8 @@ from PySide6.QtGui import QPixmap, QColor, QMovie, QGuiApplication
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from .audio_session_controller import AudioSessionController
-from .cs2_window import find_cs2_window
+from .cs2_window import find_cs2_window, foreground_window, raise_overlay_window
+from .gsi_state import PlayerEventTracker
 
 
 def _native_rect_to_logical(x, y, width, height):
@@ -76,6 +77,7 @@ class OverlayWindow(QWidget):
         self.kill_icon_width = 120
         self.kill_icon_height = 120
         self.kill_icon_bottom = 100
+        self._focused_game = 0
 
         # 击杀图标视频控件（MP4/WEBM）
         self.kill_video_widget = QVideoWidget(self)
@@ -164,14 +166,18 @@ class OverlayWindow(QWidget):
         self.focus_timer.start(100)
 
     def _check_game_focus(self):
-        user32 = ctypes.windll.user32
         cs2_hwnd = find_cs2_window()
-        fg_hwnd = user32.GetForegroundWindow()
+        fg_hwnd = foreground_window()
 
         if not cs2_hwnd or cs2_hwnd != fg_hwnd:
+            self._focused_game = 0
             if self.windowOpacity() > 0.0:
                 self.setWindowOpacity(0.0)
         else:
+            if self._focused_game != cs2_hwnd:
+                self._update_geometry_to_game()
+                raise_overlay_window(int(self.winId()))
+                self._focused_game = cs2_hwnd
             if self.windowOpacity() < 1.0:
                 self.setWindowOpacity(1.0)
 
@@ -475,6 +481,7 @@ class VisualHandler(QObject):
         # 降低/恢复音量必须按触发顺序执行，否则短暂闪白时恢复可能先于降低完成，导致游戏音量一直偏低
         self._audio_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-audio")
         self._closed = False
+        self._player_events = PlayerEventTracker()
 
         self.is_flashed = False
         self.is_dead = False
@@ -483,8 +490,6 @@ class VisualHandler(QObject):
         self._browser_opened = False
         self._boss_key_target_opened = False
         self._browser_muted = False
-        self._last_match_kills = -1
-        self._round_start_kills = 0
         self._visual_config_signature = None
         self._flash_volume_reduced = False
 
@@ -531,6 +536,8 @@ class VisualHandler(QObject):
             return
         self._update_config()
 
+        events = self._player_events.update(game_state)
+
         if not self.visual_master_enabled:
             if self.is_flashed:
                 self.is_flashed = False
@@ -544,25 +551,13 @@ class VisualHandler(QObject):
 
         player = game_state.get('player', {})
         if not player:
+            self.reset_game_state()
             return
 
         state = player.get('state', {})
-        activity = player.get('activity', '')
-        spectarget = player.get('spectarget')
-
-        # 如果是观战状态，不处理闪光和切屏
-        # 观战检测逻辑需要更严谨，防止被他人闪光或死亡影响
-        has_valid_team = player.get('team', '') in ['T', 'CT']
-        provider = game_state.get('provider', {})
-        provider_steamid = provider.get('steamid')
-        player_steamid = player.get('steamid')
         health = state.get('health', 100)
 
-        is_observing = False
-        if provider_steamid and player_steamid and provider_steamid != player_steamid:
-            is_observing = True
-        elif spectarget is not None or activity == 'spectating' or not has_valid_team:
-            is_observing = True
+        is_observing = events.observing
 
         # 1. 闪光弹处理
         if self.flash_enabled and not is_observing:
@@ -609,45 +604,33 @@ class VisualHandler(QObject):
         if self._should_restore_boss_key(phase, health, is_observing):
             self._restore_boss_key_context()
 
-        if phase == 'freezetime' and getattr(self, '_last_phase', '') != 'freezetime':
-            # Round reset
-            match_stats = player.get('match_stats', {})
-            self._round_start_kills = match_stats.get('kills', 0)
-
         # 4. 击杀图标处理
-        if self.kill_icon_enabled and not is_observing:
-            match_stats = player.get('match_stats', {})
-            current_match_kills = match_stats.get('kills', 0)
+        if self.kill_icon_enabled and events.kills:
+            current_round_kills = events.kill_count
 
-            if self._last_match_kills == -1:
-                self._last_match_kills = current_match_kills
-                self._round_start_kills = current_match_kills
-
-            if current_match_kills > self._last_match_kills:
-                self._last_match_kills = current_match_kills
-                current_round_kills = current_match_kills - self._round_start_kills
-
-                # 决定显示的图标
-                icon_to_show = ""
-                if self.kill_icon_is_advanced:
-                    idx = min(max(current_round_kills, 1), 5) - 1
-                    icon_config = self.kill_icons_1_5[idx] if idx < len(self.kill_icons_1_5) else {}
-                    icon_to_show = icon_config.get('path', '')
-                    if not icon_to_show or not os.path.exists(icon_to_show):
-                        icon_to_show = self.kill_icon_path
-                else:
+            icon_to_show = ""
+            if self.kill_icon_is_advanced:
+                idx = min(max(current_round_kills, 1), 5) - 1
+                icon_config = self.kill_icons_1_5[idx] if idx < len(self.kill_icons_1_5) else {}
+                icon_to_show = icon_config.get('path', '')
+                if not icon_to_show or not os.path.exists(icon_to_show):
                     icon_to_show = self.kill_icon_path
+            else:
+                icon_to_show = self.kill_icon_path
 
-                if icon_to_show and os.path.exists(icon_to_show):
-                    self.signals.show_kill_icon.emit(icon_to_show)
-            elif current_match_kills < self._last_match_kills:
-                self._last_match_kills = current_match_kills
-        elif is_observing:
-            # 观战时 match_stats 属于被观战的玩家，不能作为自己的击杀基线；
-            # 回到自己视角后重新同步，避免复活时误显示击杀图标。
-            self._last_match_kills = -1
-
+            if icon_to_show and os.path.exists(icon_to_show):
+                self.signals.show_kill_icon.emit(icon_to_show)
         self._last_phase = phase
+
+    def reset_game_state(self):
+        self._player_events.reset()
+        self.is_flashed = False
+        self.is_dead = False
+        self._last_phase = ''
+        self._restore_flash_audio_reduction()
+        self.signals.update_flash.emit(0)
+        self.signals.hide_death.emit()
+        self.overlay.hide_kill_icon()
 
     def _should_restore_boss_key(self, phase, health, is_observing):
         if not (self._boss_key_triggered or self._boss_key_restore_pending or self._browser_muted):
@@ -659,7 +642,7 @@ class VisualHandler(QObject):
         if phase == 'freezetime' and getattr(self, '_last_phase', '') != 'freezetime':
             return True
 
-        if health > 0 and phase == 'live':
+        if health > 0 and phase in ('', 'live'):
             return True
 
         return False

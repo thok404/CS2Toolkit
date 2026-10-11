@@ -3,6 +3,7 @@ import json
 import threading
 import socket
 import errno
+import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from .gsi_sound_handler import GSISoundHandler
@@ -85,7 +86,7 @@ class GSIManager:
     "timeout" "1.0"
     "buffer"  "0.0"
     "throttle" "0.0"
-    "heartbeat" "60.0"
+    "heartbeat" "1.0"
     "auth"
     {{
         "token" "TOKEN"
@@ -99,7 +100,7 @@ class GSIManager:
     "data"
     {{
         "map_round_wins" "0"
-        "map" "0"
+        "map" "1"
         "player_id" "1"
         "player_match_stats" "1"
         "player_state" "1"
@@ -119,8 +120,17 @@ class GSIManager:
 }}
 '''
 
-    def set_cs2_path(self, path):
+    def set_cs2_path(self, path, reuse_existing_endpoint=False):
         self.cs2_path = path
+        if reuse_existing_endpoint and not self.is_running() and not self.is_starting():
+            cfg_path = os.path.join(path, 'game', 'csgo', 'cfg', 'gamestate_integration_cs2toolkit.cfg')
+            try:
+                with open(cfg_path, 'r', encoding='utf-8') as stream:
+                    match = re.search(r'"uri"\s+"http://127\.0\.0\.1:(\d+)(?:/)?"', stream.read())
+                if match and 1 <= int(match[1]) <= 65535:
+                    self.current_port = int(match[1])
+            except OSError:
+                pass
 
     def create_gsi_cfg(self):
         if not self.cs2_path or not os.path.isdir(self.cs2_path):
@@ -130,8 +140,13 @@ class GSIManager:
             return False, f"找不到CS2的CFG目录: {cfg_dir}"
         cfg_path = os.path.join(cfg_dir, "gamestate_integration_cs2toolkit.cfg")
         try:
+            content = self.get_gsi_cfg_content()
+            if os.path.isfile(cfg_path):
+                with open(cfg_path, 'r', encoding='utf-8') as f:
+                    if f.read() == content:
+                        return True, f"GSI配置已就绪，使用端口: {self.current_port}"
             with open(cfg_path, 'w', encoding='utf-8') as f:
-                f.write(self.get_gsi_cfg_content())
+                f.write(content)
             return True, f"GSI配置文件已成功创建于: {cfg_path}\n使用端口: {self.current_port}"
         except IOError as e:
             return False, f"无法写入GSI配置文件: {e}"

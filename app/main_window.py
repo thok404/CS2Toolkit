@@ -18,6 +18,7 @@ from app.logic.gsi_manager import GSIManager
 from app.logic.visual_handler import VisualHandler
 from app.logic.go_pet_manager import GoPetManager
 from app.logic.launch_manager import LaunchManager
+from app.logic.cs2_window import find_cs2_window
 from app.release_endpoints import FORK_REPO_URL, FORK_NOTICE
 from app.logic.update_checker import check_fork_update
 from app.ui.animations import AnimationManager
@@ -39,7 +40,7 @@ class UpdateSignalEmitter(QObject):
 class CS2Tool(FluentWindow):
     def __init__(self):
         super().__init__()
-        self.version = "1.5.1"
+        self.version = "1.5.2"
         self.repo_url = FORK_REPO_URL
         self.is_dark_mode = False
         self._force_quit = False
@@ -91,6 +92,10 @@ class CS2Tool(FluentWindow):
         self.load_all_presets()
         self.update_home_status()
         self.apply_custom_background()
+        self._game_window = find_cs2_window()
+        self.game_monitor = QTimer(self)
+        self.game_monitor.timeout.connect(self._poll_game_lifecycle)
+        self.game_monitor.start(1000)
         # 延迟执行：让窗口先显示，500ms 后再检测 Steam 和检查更新
         QTimer.singleShot(500, self._deferred_startup_tasks)
 
@@ -160,7 +165,7 @@ class CS2Tool(FluentWindow):
         self.apply_custom_background()
 
     def _deferred_startup_tasks(self):
-        self.auto_detect_steam()
+        self._perform_steam_detection(reuse_existing_endpoint=True)
         self.check_for_updates(silent=True)
 
         # 启动 GSI Server（路径和配置生成已转移到 _perform_steam_detection 和 browse_steam 中处理）
@@ -177,6 +182,21 @@ class CS2Tool(FluentWindow):
                 self.setting_tab.gsi_toggle_btn.setText("启动中...")
                 self.setting_tab.gsi_toggle_btn.setEnabled(False)
                 self.setting_tab.gsi_port_input.setEnabled(False)
+
+    def _poll_game_lifecycle(self):
+        hwnd = find_cs2_window()
+        if hwnd == self._game_window:
+            return
+        self._game_window = hwnd
+        self.visual_handler.reset_game_state()
+        self.integrated_sound_page.reset_game_state()
+        self.go_pet_manager.reset_game_state()
+        self.last_game_state_overview = {"phase": "等待 GSI", "activity": "未连接", "team": "--", "health": "--"}
+        if hwnd:
+            self._perform_steam_detection()
+            self.visual_handler.overlay._update_geometry_to_game()
+            self.visual_handler.overlay._check_game_focus()
+        self.update_home_status()
 
     def init_window(self):
         self.setWindowTitle("CS2 工具箱")
@@ -207,6 +227,7 @@ class CS2Tool(FluentWindow):
 
     def quit_app(self):
         self._force_quit = True
+        self.game_monitor.stop()
         self.visual_handler.cleanup()
         QApplication.quit()
 
@@ -404,7 +425,7 @@ class CS2Tool(FluentWindow):
 
         QTimer.singleShot(10, self._perform_steam_detection)
 
-    def _perform_steam_detection(self):
+    def _perform_steam_detection(self, reuse_existing_endpoint=False):
         # 优先使用配置中保存的路径
         saved_steam_path = self.config_manager.get("steam_path")
         if saved_steam_path and os.path.exists(saved_steam_path) and os.path.exists(os.path.join(saved_steam_path, "game", "bin", "win64", "cs2.exe")):
@@ -412,7 +433,7 @@ class CS2Tool(FluentWindow):
             self.update_home_status()
 
             # 如果是优先从配置加载的，也要顺便给 GSI 生成一次配置，防止用户重装了游戏但路径没变
-            self.gsi_manager.set_cs2_path(self.steam_path)
+            self.gsi_manager.set_cs2_path(self.steam_path, reuse_existing_endpoint=reuse_existing_endpoint)
             self.gsi_manager.create_gsi_cfg()
             self._repair_current_font_if_needed(silent=True)
             return
@@ -424,7 +445,7 @@ class CS2Tool(FluentWindow):
             self.update_home_status()
 
             # 检测到新路径后自动生成配置
-            self.gsi_manager.set_cs2_path(self.steam_path)
+            self.gsi_manager.set_cs2_path(self.steam_path, reuse_existing_endpoint=reuse_existing_endpoint)
             self.gsi_manager.create_gsi_cfg()
             self._repair_current_font_if_needed(silent=True)
 
@@ -1032,6 +1053,7 @@ class CS2Tool(FluentWindow):
 
     def closeEvent(self, event):
         if self._force_quit:
+            self.game_monitor.stop()
             self.visual_handler.cleanup()
             self.gsi_manager.stop_server()
             super().closeEvent(event)
@@ -1063,6 +1085,7 @@ class CS2Tool(FluentWindow):
                     self.config_manager.set("close_behavior", "exit")
                     if hasattr(self, 'setting_tab'):
                         self.setting_tab.closeCard.comboBox.setCurrentIndex(2)
+                self.game_monitor.stop()
                 self.visual_handler.cleanup()
                 self.gsi_manager.stop_server()
                 super().closeEvent(event)
@@ -1070,6 +1093,7 @@ class CS2Tool(FluentWindow):
             self.hide()
             event.ignore()
         else:
+            self.game_monitor.stop()
             self.visual_handler.cleanup()
             self.gsi_manager.stop_server()
             super().closeEvent(event)

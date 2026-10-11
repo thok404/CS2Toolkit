@@ -3,6 +3,7 @@ import random
 from PySide6.QtCore import QObject, QTimer
 from app.ui.go_pet_overlay import GoPetCaptureWindow, GoPetOverlay
 from app.logic.sound_player import SoundPlayer
+from .gsi_state import PlayerEventTracker
 
 class GoPetManager(QObject):
     def __init__(self, config_manager):
@@ -23,6 +24,7 @@ class GoPetManager(QObject):
         self.health = 100
         self.bomb_planted = False
         self.phase = ""
+        self._player_events = PlayerEventTracker()
         
         self.priority_map = {
             "death": 100,
@@ -169,9 +171,11 @@ class GoPetManager(QObject):
 
     def process_gsi(self, game_state):
         if not self.enabled:
+            self._player_events.reset()
             return
             
         player = game_state.get('player', {})
+        events = self._player_events.update(game_state)
         if not player:
             return
             
@@ -180,12 +184,7 @@ class GoPetManager(QObject):
         phase = round_info.get('phase', '')
         match_stats = player.get('match_stats', {})
         
-        # Observation check
-        spectarget = player.get('spectarget')
-        activity = player.get('activity', '')
-        has_valid_team = player.get('team', '') in ['T', 'CT']
-        provider = game_state.get('provider', {})
-        is_observing = (spectarget is not None or activity == 'spectating' or activity != 'playing' or not has_valid_team)
+        is_observing = events.observing
         
         if is_observing:
             return
@@ -236,11 +235,7 @@ class GoPetManager(QObject):
             self._reset_to_persistent_state()
             
         # Kills
-        kills = match_stats.get('kills', 0)
-        if not hasattr(self, '_last_kills'):
-            self._last_kills = kills
-        if kills > self._last_kills:
-            self._last_kills = kills
+        if events.kills:
             self._trigger_event("kill", transient=True)
             
         # Economy (only evaluate during freezetime)
@@ -256,7 +251,7 @@ class GoPetManager(QObject):
         if not hasattr(self, '_last_mvps'):
             self._last_mvps = current_mvps
 
-        if phase == "over" and not hasattr(self, '_round_over_triggered'):
+        if phase == "over" and round_info.get('win_team') in ('T', 'CT') and not hasattr(self, '_round_over_triggered'):
             self._round_over_triggered = True
             win_team = round_info.get('win_team')
             my_team = player.get('team')
@@ -278,3 +273,16 @@ class GoPetManager(QObject):
         # overlays do not cover the pet.
         if self.display_mode == "game":
             self.overlay.ensure_on_top()
+
+    def reset_game_state(self):
+        self._player_events.reset()
+        self.reset_timer.stop()
+        self.is_dead = False
+        self.is_flashed = False
+        self.health = 100
+        self.phase = ''
+        self.bomb_planted = False
+        self._last_mvps = 0
+        if hasattr(self, '_round_over_triggered'):
+            del self._round_over_triggered
+        self._reset_to_persistent_state()
