@@ -1,4 +1,5 @@
 import sys
+import json
 from PySide6.QtWidgets import QApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
@@ -13,6 +14,18 @@ SERVER_NAME = "CS2ToolkitSingleInstanceServer_v1"
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    # 供打包验证使用：只解码指定图片，不加载用户配置或启动 GSI 服务。
+    if len(sys.argv) > 1 and sys.argv[1] == "--probe-image":
+        if len(sys.argv) != 4:
+            sys.exit(2)
+        from app.logic.image_loader import load_image
+        decoded = load_image(sys.argv[2])
+        result = {"valid": not decoded.isNull(), "width": decoded.width(),
+                  "height": decoded.height(), "alpha": decoded.hasAlphaChannel()}
+        with open(sys.argv[3], "w", encoding="utf-8") as stream:
+            json.dump(result, stream)
+        sys.exit(0 if result["valid"] else 1)
     
     # 检查是否已有实例运行
     socket = QLocalSocket()

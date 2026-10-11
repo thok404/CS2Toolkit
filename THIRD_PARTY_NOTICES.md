@@ -34,6 +34,11 @@ When distributing source code or binary releases, you should review the exact de
   - Upstream: Gregory Szorc
   - License summary: upstream repository declares `BSD-3-Clause`
 
+- `Pillow`
+  - Upstream: https://github.com/python-pillow/Pillow
+  - License: `MIT-CMU`
+  - Used for AVIF decoding, image orientation and alpha preservation. Preserve Pillow's bundled license and codec dependency notices when distributing binaries.
+
 ### Platform and External Interfaces
 
 - `Steam` registry and installation path detection are used only for local discovery of the user's game installation.

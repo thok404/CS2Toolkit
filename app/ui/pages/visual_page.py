@@ -1,4 +1,5 @@
 import os
+from ...logic.image_loader import IMAGE_FILTER, MEDIA_FILTER
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFileDialog, QColorDialog
 from PySide6.QtCore import Qt
 from qfluentwidgets import (ScrollArea, SettingCardGroup, SwitchSettingCard, SettingCard,
@@ -94,7 +95,7 @@ class VisualConfigDialog(MessageBoxBase):
         elif self.dialog_type == 'death':
             self.titleLabel = SubtitleLabel('自定义死亡画面', self)
             self.viewLayout.addWidget(self.titleLabel)
-            self.viewLayout.addWidget(BodyLabel("提示：PNG 图片支持透明/半透明显示。"))
+            self.viewLayout.addWidget(BodyLabel("提示：PNG、WebP 等图片支持透明/半透明显示。"))
 
             selection_layout = QHBoxLayout()
             selection_layout.addWidget(BodyLabel("媒体路径:"))
@@ -185,7 +186,7 @@ class VisualConfigDialog(MessageBoxBase):
         self.widget.setMinimumWidth(400)
 
     def _browse_flash_image(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择图片", "", "图片文件 (*.png *.jpg *.jpeg *.bmp)")
+        path, _ = QFileDialog.getOpenFileName(self, "选择图片", "", IMAGE_FILTER)
         if path:
             self.visual_config['flash_path'] = path
             self.path_label.setText(os.path.basename(path))
@@ -199,7 +200,7 @@ class VisualConfigDialog(MessageBoxBase):
             self.config_manager.set('visual', self.visual_config)
 
     def _browse_death_media(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择媒体文件", "", "媒体文件 (*.png *.jpg *.mp4 *.webm *.avi)")
+        path, _ = QFileDialog.getOpenFileName(self, "选择媒体文件", "", MEDIA_FILTER)
         if path:
             self.visual_config['death_media_path'] = path
             self.path_label.setText(os.path.basename(path))
@@ -427,14 +428,14 @@ class KillIconDialog(MessageBoxBase):
         self.config_manager.set('visual', self.visual_config)
 
     def _browse_basic_image(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择击杀图标", "", "媒体文件 (*.png *.jpg *.jpeg *.bmp *.gif *.mp4 *.webm)")
+        path, _ = QFileDialog.getOpenFileName(self, "选择击杀图标", "", MEDIA_FILTER)
         if path:
             self.visual_config['kill_icon_path'] = path
             self.path_label.setText(os.path.basename(path))
             self.config_manager.set('visual', self.visual_config)
 
     def _browse_adv_image(self, index):
-        path, _ = QFileDialog.getOpenFileName(self, f"选择 {index+1} 杀图标", "", "媒体文件 (*.png *.jpg *.jpeg *.bmp *.gif *.mp4 *.webm)")
+        path, _ = QFileDialog.getOpenFileName(self, f"选择 {index+1} 杀图标", "", MEDIA_FILTER)
         if path:
             icons = self.visual_config.get('kill_icons_1_5', [{} for _ in range(5)])
             icons[index]['path'] = path

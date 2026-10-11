@@ -34,6 +34,11 @@
   - 上游：Gregory Szorc
   - 许可证摘要：上游仓库声明为 `BSD-3-Clause`
 
+- `Pillow`
+  - 上游：https://github.com/python-pillow/Pillow
+  - 许可证：`MIT-CMU`
+  - 用途：AVIF 等图片解码、方向校正与透明度保留。分发时保留 Pillow 随包提供的许可证及其编解码依赖的声明。
+
 ### 平台与外部接口
 
 - `Steam` 注册表与安装路径检测仅用于本地发现用户游戏安装位置。

@@ -13,6 +13,7 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from .audio_session_controller import AudioSessionController
 from .cs2_window import find_cs2_window, foreground_window, raise_overlay_window
 from .gsi_state import PlayerEventTracker
+from .image_loader import VIDEO_EXTENSIONS, image_files, load_pixmap, create_image_movie, dispose_image_movie
 
 
 def _native_rect_to_logical(x, y, width, height):
@@ -213,7 +214,7 @@ class OverlayWindow(QWidget):
         # 重新应用缩放模式，因为窗口大小变了
         if not self.flash_label.isHidden():
             self._update_label_pixmap(self.flash_label, self.flash_image_path, self.flash_scale_mode)
-        if not self.death_label.isHidden() and not self.death_media_path.lower().endswith(('.mp4', '.webm', '.avi')):
+        if not self.death_label.isHidden() and os.path.splitext(self.death_media_path)[1].lower() not in VIDEO_EXTENSIONS:
             self._update_label_pixmap(self.death_label, self.death_media_path, self.death_scale_mode)
 
         # 击杀图标放在下方正中
@@ -239,15 +240,10 @@ class OverlayWindow(QWidget):
         self._flash_cached_pixmap = QPixmap()
 
         if path and os.path.isdir(path):
-            valid_exts = {'.png', '.jpg', '.jpeg', '.bmp'}
-            self._flash_folder_files = [
-                os.path.join(path, f)
-                for f in os.listdir(path)
-                if os.path.splitext(f)[1].lower() in valid_exts
-            ]
+            self._flash_folder_files = image_files(path)
         elif path and os.path.isfile(path):
             self._flash_cached_source = path
-            self._flash_cached_pixmap = QPixmap(path)
+            self._flash_cached_pixmap = load_pixmap(path)
 
         self._preload_flash_if_needed()
 
@@ -260,13 +256,12 @@ class OverlayWindow(QWidget):
             return
 
         if os.path.isdir(image_path):
-            valid_exts = {'.png', '.jpg', '.jpeg', '.bmp'}
-            files = [os.path.join(image_path, f) for f in os.listdir(image_path) if os.path.splitext(f)[1].lower() in valid_exts]
+            files = image_files(image_path)
             if not files:
                 return
             image_path = random.choice(files)
 
-        pixmap = QPixmap(image_path)
+        pixmap = load_pixmap(image_path)
         if scale_mode == 'stretch':
             label.setScaledContents(True)
             label.setPixmap(pixmap)
@@ -309,7 +304,7 @@ class OverlayWindow(QWidget):
         # 预加载随机图片到内存
         if self._flash_folder_files:
             chosen = random.choice(self._flash_folder_files)
-            pixmap = QPixmap(chosen)
+            pixmap = load_pixmap(chosen)
             return chosen, pixmap
         return self._flash_cached_source, self._flash_cached_pixmap
 
@@ -359,7 +354,7 @@ class OverlayWindow(QWidget):
 
         # 窗口透明度和显示已由焦点定时器 _check_game_focus 自动管理
 
-        if self.death_media_path.lower().endswith(('.mp4', '.webm', '.avi')):
+        if os.path.splitext(self.death_media_path)[1].lower() in VIDEO_EXTENSIONS:
             # QVideoWidget 默认自带等比例拉伸，如果是拉伸拉满需要设置 aspect ratio mode
             if self.death_scale_mode == 'stretch':
                 self.video_widget.setAspectRatioMode(Qt.IgnoreAspectRatio)
@@ -393,28 +388,28 @@ class OverlayWindow(QWidget):
         self.kill_video_fade_out.stop()
         self.kill_icon_timer.stop()
 
+        if self.kill_icon_movie:
+            dispose_image_movie(self.kill_icon_movie)
+            self.kill_icon_movie = None
+            self.kill_icon_label.setMovie(None)
+
         # 窗口透明度和显示已由焦点定时器 _check_game_focus 自动管理
 
-        is_video = path.lower().endswith(('.mp4', '.webm', '.avi'))
-        is_gif = path.lower().endswith('.gif')
+        is_video = os.path.splitext(path)[1].lower() in VIDEO_EXTENSIONS
+        movie = None if is_video else create_image_movie(path, self)
 
         if is_video:
             self.kill_icon_label.hide()
-            if self.kill_icon_movie:
-                self.kill_icon_movie.stop()
 
             self.kill_media_player.setSource(QUrl.fromLocalFile(path))
             self.kill_video_widget.show()
             self.kill_media_player.play()
             self.kill_video_fade_in.start()
-        elif is_gif:
+        elif movie is not None:
             self.kill_video_widget.hide()
             self.kill_media_player.stop()
 
-            if self.kill_icon_movie:
-                self.kill_icon_movie.stop()
-
-            self.kill_icon_movie = QMovie(path)
+            self.kill_icon_movie = movie
             self.kill_icon_label.setMovie(self.kill_icon_movie)
             self.kill_icon_movie.start()
             self.kill_icon_label.show()
@@ -423,10 +418,7 @@ class OverlayWindow(QWidget):
             self.kill_video_widget.hide()
             self.kill_media_player.stop()
 
-            if self.kill_icon_movie:
-                self.kill_icon_movie.stop()
-
-            self.kill_icon_label.setPixmap(QPixmap(path))
+            self.kill_icon_label.setPixmap(load_pixmap(path))
             self.kill_icon_label.show()
             self.kill_icon_fade_in.start()
 
@@ -443,7 +435,8 @@ class OverlayWindow(QWidget):
     def _on_kill_icon_fade_out_finished(self):
         self.kill_icon_label.hide()
         if self.kill_icon_movie:
-            self.kill_icon_movie.stop()
+            dispose_image_movie(self.kill_icon_movie)
+            self.kill_icon_movie = None
             self.kill_icon_label.setMovie(None) # 释放GIF内存
         self.kill_icon_label.setPixmap(QPixmap()) # 释放静态图内存
         self._check_hide()

@@ -4,6 +4,7 @@ from PySide6.QtCore import QObject, QTimer
 from app.ui.go_pet_overlay import GoPetCaptureWindow, GoPetOverlay
 from app.logic.sound_player import SoundPlayer
 from .gsi_state import PlayerEventTracker
+from .image_loader import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 
 class GoPetManager(QObject):
     def __init__(self, config_manager):
@@ -117,9 +118,10 @@ class GoPetManager(QObject):
             if is_sound:
                 exts = {'.mp3', '.wav'}
             else:
-                exts = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.mp4', '.webm', '.avi', '.mov', '.mkv'}
+                exts = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
                 
-            files = [os.path.join(path, f) for f in os.listdir(path) if os.path.splitext(f)[1].lower() in exts]
+            files = [os.path.join(path, f) for f in os.listdir(path)
+                     if os.path.isfile(os.path.join(path, f)) and os.path.splitext(f)[1].lower() in exts]
             if not files:
                 return None
             return random.choice(files)

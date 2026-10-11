@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import zipfile
+from importlib.metadata import distribution
 from app.release_endpoints import FORK_NOTICE, FORK_REPO_URL, UPSTREAM_REPO_URL
 
 
@@ -125,6 +126,9 @@ def build_exe():
             "--include-package=PySide6.QtMultimedia",
             "--include-qt-plugins=multimedia",
             "--include-qt-plugins=platforms",
+            "--include-qt-plugins=imageformats",
+            "--include-module=PIL.AvifImagePlugin",
+            "--include-module=PIL._avif",
             "--include-module=pycaw.pycaw",
             "--assume-yes-for-downloads",
             "--output-dir=dist",
@@ -163,6 +167,15 @@ def build_exe():
                 sys.exit(1)
 
         os.makedirs(package_root, exist_ok=True)
+        for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.zh-CN.md"):
+            shutil.copy2(os.path.join(project_root, name), os.path.join(package_root, name))
+        pillow_package = distribution("Pillow")
+        for name in pillow_package.files or []:
+            if ".dist-info/licenses/" in str(name).replace("\\", "/"):
+                relative = str(name).replace("\\", "/").split(".dist-info/licenses/", 1)[1]
+                target = os.path.join(package_root, "licenses", "Pillow", relative)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.copy2(pillow_package.locate_file(name), target)
         with open(os.path.join(package_root, "FORK_NOTICE.txt"), "w", encoding="utf-8") as notice:
             notice.write(
                 f"CS2Toolkit v{version}\n\n{FORK_NOTICE}\n\n"

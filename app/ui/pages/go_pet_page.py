@@ -1,4 +1,5 @@
 import os
+from ...logic.image_loader import MEDIA_FILTER
 
 from PySide6.QtCore import QByteArray, QEvent, QMimeData, QPoint, Qt
 from PySide6.QtGui import QDrag
@@ -524,7 +525,7 @@ class PetEventDialog(MessageBoxBase):
 
     def _browse_image(self):
         if self.image_mode_combo.currentIndex() == 0:
-            path, _ = QFileDialog.getOpenFileName(self, "选择立绘", "", "媒体 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.mp4 *.webm *.avi *.mov *.mkv)")
+            path, _ = QFileDialog.getOpenFileName(self, "选择立绘", "", MEDIA_FILTER)
         else:
             path = QFileDialog.getExistingDirectory(self, "选择立绘文件夹")
 

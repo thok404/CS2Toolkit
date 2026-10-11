@@ -7,6 +7,7 @@ from qfluentwidgets import BodyLabel
 import ctypes
 import os
 import random
+from ..logic.image_loader import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, load_pixmap, create_image_movie, dispose_image_movie
 
 class GoPetSignals(QObject):
     update_pet = Signal(str) # image path
@@ -29,8 +30,8 @@ class _BasePetWindow(QWidget):
 
         self._current_image_path = ""
         self.pet_size = 200
-        self._video_exts = {'.mp4', '.webm', '.avi', '.mov', '.mkv'}
-        self._image_exts = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'}
+        self._video_exts = VIDEO_EXTENSIONS
+        self._image_exts = IMAGE_EXTENSIONS
 
     def _resolve_media_path(self, image_path):
         if not image_path:
@@ -40,7 +41,7 @@ class _BasePetWindow(QWidget):
             files = [
                 os.path.join(image_path, f)
                 for f in os.listdir(image_path)
-                if os.path.splitext(f)[1].lower() in valid_exts
+                if os.path.isfile(os.path.join(image_path, f)) and os.path.splitext(f)[1].lower() in valid_exts
             ]
             if not files:
                 return ""
@@ -52,7 +53,7 @@ class _BasePetWindow(QWidget):
         self.pet_media_player.setSource(QUrl())
         self.pet_video_widget.hide()
         if self.pet_movie:
-            self.pet_movie.stop()
+            dispose_image_movie(self.pet_movie)
             self.pet_movie = None
             self.pet_label.setMovie(None)
         self.pet_label.setPixmap(QPixmap())
@@ -66,11 +67,11 @@ class _BasePetWindow(QWidget):
         self._current_image_path = resolved_path
         suffix = os.path.splitext(resolved_path)[1].lower()
         is_video = suffix in self._video_exts
-        is_gif = suffix == '.gif'
+        movie = None if is_video else create_image_movie(resolved_path, self)
 
         if is_video:
             if self.pet_movie:
-                self.pet_movie.stop()
+                dispose_image_movie(self.pet_movie)
                 self.pet_movie = None
                 self.pet_label.setMovie(None)
             self.pet_label.hide()
@@ -78,13 +79,13 @@ class _BasePetWindow(QWidget):
             self.pet_video_widget.show()
             self.pet_media_player.setSource(QUrl.fromLocalFile(resolved_path))
             self.pet_media_player.play()
-        elif is_gif:
+        elif movie is not None:
             self.pet_media_player.stop()
             self.pet_media_player.setSource(QUrl())
             self.pet_video_widget.hide()
             if self.pet_movie:
-                self.pet_movie.stop()
-            self.pet_movie = QMovie(resolved_path)
+                dispose_image_movie(self.pet_movie)
+            self.pet_movie = movie
             self.pet_label.setMovie(self.pet_movie)
             self.pet_movie.start()
             self.pet_label.show()
@@ -93,10 +94,10 @@ class _BasePetWindow(QWidget):
             self.pet_media_player.setSource(QUrl())
             self.pet_video_widget.hide()
             if self.pet_movie:
-                self.pet_movie.stop()
+                dispose_image_movie(self.pet_movie)
                 self.pet_movie = None
                 self.pet_label.setMovie(None)
-            self.pet_label.setPixmap(QPixmap(resolved_path))
+            self.pet_label.setPixmap(load_pixmap(resolved_path))
             self.pet_label.show()
 
         self._update_geometry()

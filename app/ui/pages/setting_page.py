@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor
 import winreg
 import sys
 import os
+from ...logic.image_loader import IMAGE_FILTER, load_image
 
 IMPORT_OPTION_LABELS = {
     "bg": "自定义软件背景",
@@ -86,8 +87,11 @@ class BackgroundSettingDialog(MessageBoxBase):
         self.widget.setMinimumWidth(360)
 
     def _on_select_bg(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择背景图片", "", "图片文件 (*.png *.jpg *.jpeg)")
+        path, _ = QFileDialog.getOpenFileName(self, "选择背景图片", "", IMAGE_FILTER)
         if path:
+            if load_image(path).isNull():
+                self.parent_window.show_warning("图片无法读取", "请选择有效的图片文件。")
+                return
             self.config_manager.set("bg_path", path)
             self.path_label.setText(os.path.basename(path))
             if hasattr(self.parent_window, 'apply_custom_background'):

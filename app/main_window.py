@@ -19,6 +19,7 @@ from app.logic.visual_handler import VisualHandler
 from app.logic.go_pet_manager import GoPetManager
 from app.logic.launch_manager import LaunchManager
 from app.logic.cs2_window import find_cs2_window
+from app.logic.image_loader import load_pixmap
 from app.release_endpoints import FORK_REPO_URL, FORK_NOTICE
 from app.logic.update_checker import check_fork_update
 from app.ui.animations import AnimationManager
@@ -40,7 +41,7 @@ class UpdateSignalEmitter(QObject):
 class CS2Tool(FluentWindow):
     def __init__(self):
         super().__init__()
-        self.version = "1.5.2"
+        self.version = "1.5.3"
         self.repo_url = FORK_REPO_URL
         self.is_dark_mode = False
         self._force_quit = False
@@ -108,7 +109,10 @@ class CS2Tool(FluentWindow):
             return
 
         self.bg_label.show()
-        pixmap = QPixmap(bg_path)
+        pixmap = load_pixmap(bg_path)
+        if pixmap.isNull():
+            self.bg_label.hide()
+            return
 
         # apply brightness
         bright = self.config_manager.get("bg_bright", 100) / 100.0

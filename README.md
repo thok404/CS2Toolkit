@@ -10,10 +10,12 @@
 
 - 技术栈：`Python`、`PySide6`、`PySide6-Fluent-Widgets`
 - 当前平台：`Windows 10/11`
-- 主要依赖：`PySide6`、`PySide6-Fluent-Widgets`、`requests`、`pycaw`
+- 主要依赖：`PySide6`、`PySide6-Fluent-Widgets`、`requests`、`pycaw`、`Pillow`
 - 开源许可证：`GPL-3.0-only`
 
 ## 功能概览
+
+图片统一支持 PNG/APNG、JPEG/JPG/JPE/JFIF、BMP/DIB、GIF、WebP、TIFF/TIF、AVIF、ICO、SVG/SVGZ、TGA，可用于软件背景、闪光、死亡画面、击杀图标和桌宠，也可放入随机选图文件夹。击杀图标和桌宠播放 GIF、动态 WebP；其他图片显示位置以及 APNG、AVIF 动图使用首帧。
 
 实时事件按 GSI 数据判断，不限制为竞技模式。击杀、死亡、切枪、换弹与闪光等通用事件可用于休闲、死斗、军备竞赛、搭档及自定义场景；仅在收到对应数据时触发。炸弹、回合胜负等事件需要当前场景本身提供相应数据。
 
