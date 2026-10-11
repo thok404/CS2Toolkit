@@ -551,7 +551,7 @@ class CS2Tool(FluentWindow):
             old_port = game_state.get("old_port")
             new_port = game_state.get("new_port")
             self.config_manager.set("gsi_port", new_port)
-            self.show_warning("GSI端口被占用", f"原端口 {old_port} 被占用，已自动切换至 {new_port}。\n请前往【设置-高级】点击「重新生成GSI配置」并重启游戏，否则音效将失效！", duration=10000)
+            self.show_warning("GSI端口已切换", f"原端口 {old_port} 无法绑定，已切换至 {new_port}。\n正在同步GSI配置；请重启 CS2 使新端口生效。", duration=10000)
             if hasattr(self, 'setting_tab') and hasattr(self.setting_tab, 'gsi_port_input'):
                 self.setting_tab.gsi_port_input.setText(str(new_port))
             return
@@ -562,6 +562,11 @@ class CS2Tool(FluentWindow):
             host = game_state.get("host", "127.0.0.1")
             if isinstance(port, int):
                 self.config_manager.set("gsi_port", port)
+            if self.steam_path:
+                self.gsi_manager.set_cs2_path(self.steam_path)
+                cfg_ok, cfg_message = self.gsi_manager.create_gsi_cfg()
+                if not cfg_ok:
+                    self.show_error("GSI配置同步失败", cfg_message)
             if hasattr(self, 'home_tab'):
                 self.home_tab.status_gsi_server.setText(f"服务运行中...")
                 self.home_tab.status_gsi_server.setStyleSheet("color: green;")
