@@ -6,14 +6,15 @@ import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtWidgets import QWidget, QLabel
-from PySide6.QtCore import Qt, QUrl, QTimer, Signal, QObject, QPropertyAnimation, QRect
-from PySide6.QtGui import QPixmap, QColor, QMovie, QGuiApplication
+from PySide6.QtCore import Qt, QUrl, QTimer, Signal, QObject, QPropertyAnimation, QRect, QSize, QPointF, QEasingCurve, QElapsedTimer, QEvent
+from PySide6.QtGui import QPixmap, QColor, QMovie, QGuiApplication, QPainter
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from .audio_session_controller import AudioSessionController
 from .cs2_window import find_cs2_window, foreground_window, raise_overlay_window
 from .gsi_state import PlayerEventTracker
 from .image_loader import VIDEO_EXTENSIONS, image_files, load_pixmap, create_image_movie, dispose_image_movie
+from .flash_settings import DEFAULT_FLASH_FADE_MS, normalize_flash_fade_duration
 
 
 def _native_rect_to_logical(x, y, width, height):
@@ -53,6 +54,32 @@ class VisualSignals(QObject):
     minimize_browser = Signal()
     pause_media = Signal()
 
+class FlashCoverLabel(QLabel):
+    """Draw a prepared opaque cover once, with a single opacity blend."""
+    opacityChanged = Signal(float)
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._opacity = 0.0
+
+    def opacity(self):
+        return self._opacity
+
+    def setOpacity(self, opacity):
+        if opacity == self._opacity:
+            return
+        self._opacity = opacity
+        self.update()
+        self.opacityChanged.emit(opacity)
+
+    def paintEvent(self, event):
+        if self._opacity <= 0:
+            return
+        painter = QPainter(self)
+        painter.setOpacity(self._opacity)
+        painter.drawPixmap(QPointF(0, 0), self.pixmap())
+
+
 class OverlayWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -60,7 +87,7 @@ class OverlayWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
 
-        self.flash_label = QLabel(self)
+        self.flash_label = FlashCoverLabel(self)
         self.flash_label.setAlignment(Qt.AlignCenter)
         # 不隐藏 flash_label，只通过透明度控制
 
@@ -103,30 +130,40 @@ class OverlayWindow(QWidget):
         self._flash_folder_files = []
         self._flash_cached_source = ""
         self._flash_cached_pixmap = QPixmap()
+        self._flash_display_pixmap = QPixmap()
+        self._flash_prepared_ratio = None
         self.death_media_path = ""
         self.death_scale_mode = "stretch"
-
-        # 淡出动画相关
-        self.fade_timer = QTimer(self)
-        self.fade_timer.timeout.connect(self._fade_out_step)
-        self.current_opacity = 1.0
 
         # 击杀图标定时隐藏
         self.kill_icon_timer = QTimer(self)
         self.kill_icon_timer.timeout.connect(self.hide_kill_icon)
 
         from PySide6.QtWidgets import QGraphicsOpacityEffect
-        self.flash_opacity_effect = QGraphicsOpacityEffect()
         self.kill_icon_opacity_effect = QGraphicsOpacityEffect()
         self.kill_video_opacity_effect = QGraphicsOpacityEffect()
 
-        self.flash_label.setGraphicsEffect(self.flash_opacity_effect)
         self.kill_icon_label.setGraphicsEffect(self.kill_icon_opacity_effect)
         self.kill_video_widget.setGraphicsEffect(self.kill_video_opacity_effect)
 
-        self.flash_opacity_effect.setOpacity(0.0)
+        self.flash_label.setOpacity(0.0)
         self.kill_icon_opacity_effect.setOpacity(0.0)
         self.kill_video_opacity_effect.setOpacity(0.0)
+
+        self.flash_recovery_timer = QTimer(self)
+        self.flash_recovery_timer.setSingleShot(True)
+        self.flash_recovery_timer.setTimerType(Qt.PreciseTimer)
+        self.flash_recovery_timer.setInterval(60)
+        self.flash_recovery_timer.timeout.connect(self._start_flash_fade_out)
+        self.flash_fade_timer = QTimer(self)
+        self.flash_fade_timer.setTimerType(Qt.PreciseTimer)
+        self.flash_fade_timer.timeout.connect(self._advance_flash_fade)
+        self._flash_fade_elapsed = QElapsedTimer()
+        self._flash_fade_curve = QEasingCurve(QEasingCurve.InOutSine)
+        self._flash_fade_start_opacity = 1.0
+        self._flash_fade_duration = DEFAULT_FLASH_FADE_MS
+        self._flash_active_fade_duration = DEFAULT_FLASH_FADE_MS
+        self._flash_screen = None
 
         self.kill_icon_fade_in = QPropertyAnimation(self.kill_icon_opacity_effect, b"opacity")
         self.kill_icon_fade_in.setDuration(300)
@@ -166,6 +203,43 @@ class OverlayWindow(QWidget):
         self.focus_timer.timeout.connect(self._check_game_focus)
         self.focus_timer.start(100)
 
+        self.windowHandle().screenChanged.connect(self._on_flash_screen_changed)
+        self._on_flash_screen_changed(self.screen())
+
+    def event(self, event):
+        handled = super().event(event)
+        if event.type() == QEvent.DevicePixelRatioChange and hasattr(self, '_flash_prepared_ratio'):
+            self._refresh_flash_pixels()
+        return handled
+
+    def _on_flash_screen_changed(self, screen):
+        if self._flash_screen is not screen:
+            if self._flash_screen is not None:
+                try:
+                    self._flash_screen.refreshRateChanged.disconnect(self._refresh_flash_cadence)
+                except RuntimeError:
+                    pass  # The old QScreen may already be destroyed after unplugging.
+            self._flash_screen = screen
+            if screen is not None:
+                screen.refreshRateChanged.connect(self._refresh_flash_cadence)
+        self._refresh_flash_cadence()
+        self._refresh_flash_pixels()
+
+    def _refresh_flash_pixels(self):
+        if self._flash_prepared_ratio != self.flash_label.devicePixelRatioF():
+            self._set_label_pixmap_from_pixmap(
+                self.flash_label, self._flash_display_pixmap, self.flash_scale_mode)
+
+    def _refresh_flash_cadence(self, *_):
+        screen = self.screen()
+        refresh = screen.refreshRate() if screen is not None else 0
+        interval = max(4, min(16, round(1000 / refresh))) if refresh > 0 else 16
+        if self.flash_fade_timer.interval() != interval:
+            self.flash_fade_timer.setInterval(interval)
+
+    def set_flash_fade_duration(self, duration):
+        self._flash_fade_duration = normalize_flash_fade_duration(duration)
+
     def _check_game_focus(self):
         cs2_hwnd = find_cs2_window()
         fg_hwnd = foreground_window()
@@ -183,6 +257,7 @@ class OverlayWindow(QWidget):
                 self.setWindowOpacity(1.0)
 
     def _update_geometry_to_game(self):
+        previous_size = self.flash_label.size()
         user32 = ctypes.windll.user32
         hwnd = find_cs2_window()
         if hwnd:
@@ -212,8 +287,11 @@ class OverlayWindow(QWidget):
         self.video_widget.setGeometry(self.rect())
 
         # 重新应用缩放模式，因为窗口大小变了
-        if not self.flash_label.isHidden():
-            self._update_label_pixmap(self.flash_label, self.flash_image_path, self.flash_scale_mode)
+        if (self.flash_label.size() != previous_size
+                or self._flash_prepared_ratio != self.flash_label.devicePixelRatioF()):
+            self._set_label_pixmap_from_pixmap(
+                self.flash_label, self._flash_display_pixmap, self.flash_scale_mode
+            )
         if not self.death_label.isHidden() and os.path.splitext(self.death_media_path)[1].lower() not in VIDEO_EXTENSIONS:
             self._update_label_pixmap(self.death_label, self.death_media_path, self.death_scale_mode)
 
@@ -283,22 +361,36 @@ class OverlayWindow(QWidget):
         if pixmap.isNull():
             return
 
-        if scale_mode == 'stretch':
-            label.setScaledContents(True)
-            label.setPixmap(pixmap)
-            return
-
+        # QLabel 的自动拉伸会将缩放推迟到触发闪光后的绘制阶段。
+        # 按目标屏幕的物理像素提前缩放，开始覆盖和淡出只绘制缓存。
         label.setScaledContents(False)
-        if scale_mode == 'keep_aspect_crop':
+        if scale_mode == 'stretch':
+            aspect_mode = Qt.IgnoreAspectRatio
+        elif scale_mode == 'keep_aspect_crop':
             aspect_mode = Qt.KeepAspectRatioByExpanding
         else:
             aspect_mode = Qt.KeepAspectRatio
 
         if label.width() > 0 and label.height() > 0:
-            scaled_pixmap = pixmap.scaled(label.size(), aspect_mode, Qt.SmoothTransformation)
-            label.setPixmap(scaled_pixmap)
+            ratio = label.devicePixelRatioF()
+            target_size = QSize(round(label.width() * ratio), round(label.height() * ratio))
+            scaled_pixmap = pixmap.scaled(target_size, aspect_mode, Qt.SmoothTransformation)
+            scaled_pixmap.setDevicePixelRatio(ratio)
+            # 透明像素、留白和裁切都在预加载时合成为一张不透明底图。
+            # 淡出时无需 QGraphicsOpacityEffect 每帧生成全窗口中间图像。
+            prepared = QPixmap(target_size)
+            prepared.setDevicePixelRatio(ratio)
+            prepared.fill(QColor("#202020"))
+            painter = QPainter(prepared)
+            logical_size = scaled_pixmap.deviceIndependentSize()
+            painter.drawPixmap(QPointF((label.width() - logical_size.width()) / 2,
+                                      (label.height() - logical_size.height()) / 2), scaled_pixmap)
+            painter.end()
+            label.setPixmap(prepared)
+            self._flash_prepared_ratio = ratio
         else:
             label.setPixmap(pixmap)
+            self._flash_prepared_ratio = None
 
     def _prepare_flash_pixmap(self):
         # 预加载随机图片到内存
@@ -310,16 +402,20 @@ class OverlayWindow(QWidget):
 
     def _preload_flash_if_needed(self):
         # 提前准备好闪光图片，但不显示
-        self.flash_label.setStyleSheet("background: transparent;")
-        _, pixmap = self._prepare_flash_pixmap()
-        self._set_label_pixmap_from_pixmap(self.flash_label, pixmap, self.flash_scale_mode)
+        # 图片透明区及等比例留白也必须挡住底下的白光。
+        _, self._flash_display_pixmap = self._prepare_flash_pixmap()
+        self._set_label_pixmap_from_pixmap(
+            self.flash_label, self._flash_display_pixmap, self.flash_scale_mode
+        )
 
     def update_flash(self, flash_value):
-        if not self.flash_image_path or not os.path.exists(self.flash_image_path):
-            self.fade_timer.stop()
-            self.current_opacity = 0.0
-            self.flash_opacity_effect.setOpacity(0.0)
+        # 显示已解码的图片，触发时不再访问磁盘。
+        if self._flash_display_pixmap.isNull():
+            self.flash_recovery_timer.stop()
+            self.flash_fade_timer.stop()
+            self.flash_label.setOpacity(0.0)
             self.flash_label.setPixmap(QPixmap())
+            self._flash_display_pixmap = QPixmap()
             self._check_hide()
             return
 
@@ -327,26 +423,51 @@ class OverlayWindow(QWidget):
             # 几何信息已由 geometry_timer 定期更新，无需在此处调用
 
             # 只要 flashed 为 1，透明度直接设为 1 (100% 显示)
-            self.fade_timer.stop()
-            self.current_opacity = 1.0
-            self.flash_opacity_effect.setOpacity(1.0)
+            self.flash_recovery_timer.stop()
+            self.flash_fade_timer.stop()
+            self.flash_label.setOpacity(1.0)
+            # 游戏刚获得焦点时，不等待下一次焦点轮询；本次事件返回前绘制。
+            if self._focused_game and foreground_window() == self._focused_game:
+                if self.windowOpacity() < 1.0:
+                    self.setWindowOpacity(1.0)
+            else:
+                self._check_game_focus()
+            if self.windowOpacity() > 0.0:
+                self.repaint()
         else:
-            # 当 flashed 变为 0 时，如果图片正在显示，则启动淡出动画
-            if self.current_opacity > 0 and not self.fade_timer.isActive():
-                self.fade_timer.start(50)  # 每 50ms 更新一次透明度
+            # 恢复信号稳定 60 ms 后淡出，避免短暂回跳时刚露出游戏又盖回。
+            if (self.flash_label.opacity() > 0
+                    and not self.flash_fade_timer.isActive()
+                    and not self.flash_recovery_timer.isActive()):
+                self.flash_recovery_timer.start()
 
-    def _fade_out_step(self):
-        self.current_opacity -= 0.05  # 每次减少 0.05，约 1 秒淡出
-        if self.current_opacity <= 0:
-            self.current_opacity = 0
-            self.fade_timer.stop()
-            self.flash_opacity_effect.setOpacity(0.0)
-            self.flash_label.setPixmap(QPixmap()) # 释放闪光图内存
-            self.flash_label.setStyleSheet("background: transparent;")
-            self._preload_flash_if_needed() # 淡出结束后立即为下一次闪光准备好资源
-            self._check_hide()
+    def _start_flash_fade_out(self):
+        self.flash_recovery_timer.stop()
+        if self.flash_label.opacity() <= 0 or self.flash_fade_timer.isActive():
             return
-        self.flash_opacity_effect.setOpacity(self.current_opacity)
+        self._flash_active_fade_duration = self._flash_fade_duration
+        if not self._flash_active_fade_duration:
+            self.flash_label.setOpacity(0.0)
+            self._on_flash_fade_out_finished()
+            return
+        self._refresh_flash_cadence()
+        self._flash_fade_start_opacity = self.flash_label.opacity()
+        self._flash_fade_elapsed.start()
+        self.flash_fade_timer.start()
+
+    def _advance_flash_fade(self):
+        # 按经过时间插值，丢帧不会累积延长淡出；定时器跟随屏幕刷新率。
+        progress = min(1.0, self._flash_fade_elapsed.elapsed() / self._flash_active_fade_duration)
+        opacity = self._flash_fade_start_opacity * (1.0 - self._flash_fade_curve.valueForProgress(progress))
+        self.flash_label.setOpacity(opacity)
+        if progress >= 1.0:
+            self.flash_fade_timer.stop()
+            self._on_flash_fade_out_finished()
+
+    def _on_flash_fade_out_finished(self):
+        # 完全透明后才准备下一张图；淡出途中及尺寸刷新时不切换资源。
+        self._preload_flash_if_needed()
+        self._check_hide()
 
     def show_death(self):
         if not self.death_media_path or not os.path.exists(self.death_media_path):
@@ -499,6 +620,7 @@ class VisualHandler(QObject):
         self.flash_enabled = config.get('flash_enabled', False)
         self.flash_path = config.get('flash_path', '')
         self.flash_scale_mode = config.get('flash_scale_mode', 'stretch')
+        self.overlay.set_flash_fade_duration(config.get('flash_fade_duration_ms'))
         self.flash_reduce_volume_enabled = config.get('flash_reduce_volume_enabled', False)
         self.flash_reduce_volume_percent = config.get('flash_reduce_volume_percent', 25)
         self.overlay.set_flash_image(

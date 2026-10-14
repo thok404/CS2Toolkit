@@ -41,7 +41,7 @@ class UpdateSignalEmitter(QObject):
 class CS2Tool(FluentWindow):
     def __init__(self):
         super().__init__()
-        self.version = "1.5.3"
+        self.version = "1.5.4"
         self.repo_url = FORK_REPO_URL
         self.is_dark_mode = False
         self._force_quit = False
@@ -615,6 +615,8 @@ class CS2Tool(FluentWindow):
 
         # 处理正常的游戏状态数据
         if not any(key in game_state for key in ["error", "success"]):
+            # 先呈现闪光覆盖，避免状态栏刷新及音效初始化延迟这一帧。
+            self.visual_handler.process_gsi(game_state)
             player = game_state.get('player', {})
             state = player.get('state', {})
             round_info = game_state.get('round', {})
@@ -630,7 +632,6 @@ class CS2Tool(FluentWindow):
                 self.home_tab.update_gsi_overview()
             # This is where the event matching logic will go
             self.integrated_sound_page.process_game_state(game_state)
-            self.visual_handler.process_gsi(game_state)
             self.go_pet_manager.process_gsi(game_state)
 
 

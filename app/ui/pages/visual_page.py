@@ -1,5 +1,6 @@
 import os
 from ...logic.image_loader import IMAGE_FILTER, MEDIA_FILTER
+from ...logic.flash_settings import DEFAULT_FLASH_FADE_MS, MAX_FLASH_FADE_MS, FLASH_FADE_STEP_MS, normalize_flash_fade_duration
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFileDialog, QColorDialog
 from PySide6.QtCore import Qt
 from qfluentwidgets import (ScrollArea, SettingCardGroup, SwitchSettingCard, SettingCard,
@@ -69,6 +70,24 @@ class VisualConfigDialog(MessageBoxBase):
             self.scale_combo.currentIndexChanged.connect(self._on_flash_scale_changed)
             scale_layout.addWidget(self.scale_combo, 1)
             self.viewLayout.addLayout(scale_layout)
+
+            fade_layout = QHBoxLayout()
+            fade_layout.addWidget(BodyLabel("淡出时长:"))
+            self.flash_fade_slider = Slider(Qt.Horizontal, self)
+            self.flash_fade_slider.setRange(0, MAX_FLASH_FADE_MS // FLASH_FADE_STEP_MS)
+            duration = normalize_flash_fade_duration(self.visual_config.get('flash_fade_duration_ms'))
+            self.flash_fade_slider.setValue(duration // FLASH_FADE_STEP_MS)
+            self.flash_fade_value = BodyLabel(self._flash_fade_text(duration))
+            self.flash_fade_value.setMinimumWidth(70)
+            self.flash_fade_slider.valueChanged.connect(self._on_flash_fade_duration_changed)
+            self.flash_fade_slider.sliderReleased.connect(self._save_flash_fade_duration)
+            fade_layout.addWidget(self.flash_fade_slider, 1)
+            fade_layout.addWidget(self.flash_fade_value)
+            self.viewLayout.addLayout(fade_layout)
+            self.viewLayout.addWidget(BodyLabel("自动适配当前屏幕刷新率；再次被闪时立即覆盖。"))
+            self.flash_fade_reset = PushButton("恢复默认淡出", self)
+            self.flash_fade_reset.clicked.connect(self._reset_flash_fade_duration)
+            self.viewLayout.addWidget(self.flash_fade_reset, 0, Qt.AlignLeft)
 
             reduce_layout = QHBoxLayout()
             reduce_layout.addWidget(BodyLabel("闪光弹降噪:"))
@@ -256,6 +275,30 @@ class VisualConfigDialog(MessageBoxBase):
         self.action_combo.setCurrentIndex(idx)
         self.action_combo.blockSignals(False)
         self.action_combo.setEnabled(True)
+
+    @staticmethod
+    def _flash_fade_text(duration):
+        return f"{duration / 1000:.1f} 秒" if duration else "无淡出"
+
+    def _reset_flash_fade_duration(self):
+        self.flash_fade_slider.blockSignals(True)
+        self.flash_fade_slider.setValue(DEFAULT_FLASH_FADE_MS // FLASH_FADE_STEP_MS)
+        self.flash_fade_slider.blockSignals(False)
+        self.flash_fade_value.setText(self._flash_fade_text(DEFAULT_FLASH_FADE_MS))
+        self._save_flash_fade_duration()
+
+    def _on_flash_fade_duration_changed(self, value):
+        self.flash_fade_value.setText(self._flash_fade_text(value * FLASH_FADE_STEP_MS))
+        # Dragging updates the readout, then persists once on release. Keyboard
+        # and direct clicks save immediately, using the latest settings object.
+        if not self.flash_fade_slider.isSliderDown():
+            self._save_flash_fade_duration()
+
+    def _save_flash_fade_duration(self):
+        visual = dict(self.config_manager.get('visual', {}))
+        visual['flash_fade_duration_ms'] = self.flash_fade_slider.value() * FLASH_FADE_STEP_MS
+        self.config_manager.set('visual', visual)
+        self.visual_config = visual
 
     def _on_flash_audio_switch_changed(self, checked):
         self.visual_config['flash_reduce_volume_enabled'] = checked
@@ -479,6 +522,7 @@ class VisualPage(ScrollArea):
             'flash_enabled': False,
             'flash_path': '',
             'flash_scale_mode': 'stretch',
+            'flash_fade_duration_ms': DEFAULT_FLASH_FADE_MS,
             'flash_reduce_volume_enabled': False,
             'flash_reduce_volume_percent': 25,
             'death_media_enabled': False,

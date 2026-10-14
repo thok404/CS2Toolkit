@@ -131,6 +131,15 @@ class GameLifecycleTests(unittest.TestCase):
             overlay._check_game_focus()
         self.assertEqual(overlay.windowOpacity(), 0.0)
 
+    def test_flash_cover_is_presented_before_status_ui_and_sound_work(self):
+        order = []
+        with patch.object(self.window.visual_handler, 'process_gsi', side_effect=lambda _: order.append('visual')), \
+                patch.object(self.window.home_tab, 'update_gsi_overview', side_effect=lambda: order.append('overview')), \
+                patch.object(self.window.integrated_sound_page, 'process_game_state', side_effect=lambda _: order.append('sound')), \
+                patch.object(self.window.go_pet_manager, 'process_gsi', side_effect=lambda _: order.append('pet')):
+            self.window.handle_gsi_data_on_ui_thread({'player': {'state': {'flashed': 255}}})
+        self.assertEqual(order, ['visual', 'overview', 'sound', 'pet'])
+
 
 if __name__ == '__main__':
     unittest.main()
